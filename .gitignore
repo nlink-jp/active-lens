@@ -1,0 +1,27 @@
+# Build artifacts
+dist/
+
+# Go
+*.test
+*.out
+
+# Local durable store (never commit real activity data — personal timestamps)
+*.db
+*.db-wal
+*.db-shm
+
+# Credentials / config with machine-specific values
+.env
+config.toml
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+.claude/

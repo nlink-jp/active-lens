@@ -1,0 +1,30 @@
+# active-lens configuration (example).
+#
+# Copy to your config dir and edit:
+#   macOS   ~/Library/Application Support/active-lens/config.toml
+#
+# Every value is OPTIONAL — sensible defaults apply. Run `active-lens doctor`
+# to see what resolved on your machine.
+
+[sampling]
+# How often the daemon samples the activity state, in seconds.
+# interval_seconds = 15
+
+# Idle cutoff, in seconds: below this you count as "operating", at/above as
+# "present" (on screen but not typing/clicking).
+# active_threshold_seconds = 30
+
+# Cap on how much an inter-sample gap credits to a state, in seconds. A gap
+# larger than this means the daemon was not running (system asleep) and the
+# excess is counted as "away". Defaults to interval_seconds * 3.
+# max_gap_seconds = 45
+
+[work]
+# Minimum away span (minutes) counted as a work break in the timeline. Shorter
+# away gaps are folded into continuous work. Used by `active-lens timeline`.
+# break_minutes = 10
+
+[storage]
+# Where raw samples are stored. Point this at an iCloud Drive / Dropbox folder
+# for loose cross-device history (single-writer only — one machine's daemon).
+# db_path = "~/Library/Application Support/active-lens/activity.db"
