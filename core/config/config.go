@@ -25,6 +25,14 @@ type Config struct {
 	// BreakMinutes is the minimum away span (in minutes) counted as a work break
 	// in the timeline; shorter away gaps are folded into continuous work.
 	BreakMinutes int
+	// SessionGapMinutes is the away span (in minutes) that ends a work session.
+	// It must exceed BreakMinutes, otherwise every break would also terminate the
+	// session it sits in.
+	SessionGapMinutes int
+	// DayStartHour (0..23) is the local hour a logical day begins at. Activity
+	// before it is filed under the previous day, so an evening that runs past
+	// midnight stays on the day it started.
+	DayStartHour int
 	// DBPath is where raw samples are stored.
 	DBPath string
 }
@@ -38,6 +46,8 @@ func Defaults(dataDir string) Config {
 		ActiveThresholdSeconds: 30,
 		MaxGapSeconds:          interval * 3,
 		BreakMinutes:           10,
+		SessionGapMinutes:      240,
+		DayStartHour:           4,
 		DBPath:                 filepath.Join(dataDir, "activity.db"),
 	}
 }
@@ -95,8 +105,28 @@ func apply(cfg Config, data []byte) (Config, error) {
 		}
 		cfg.BreakMinutes = n
 	}
+	if v, ok := kv["work.session_gap_minutes"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return cfg, fmt.Errorf("work.session_gap_minutes: want positive integer, got %q", v)
+		}
+		cfg.SessionGapMinutes = n
+	}
+	if v, ok := kv["work.day_start_hour"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 23 {
+			return cfg, fmt.Errorf("work.day_start_hour: want integer 0..23, got %q", v)
+		}
+		cfg.DayStartHour = n
+	}
 	if v, ok := kv["storage.db_path"]; ok && v != "" {
 		cfg.DBPath = expandHome(v)
+	}
+	// A session gap at or below the break threshold would make every break end the
+	// session it sits in, so no session could ever contain a break.
+	if cfg.SessionGapMinutes <= cfg.BreakMinutes {
+		return cfg, fmt.Errorf("work.session_gap_minutes (%d) must exceed work.break_minutes (%d)",
+			cfg.SessionGapMinutes, cfg.BreakMinutes)
 	}
 	return cfg, nil
 }

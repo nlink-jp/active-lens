@@ -20,9 +20,19 @@
 # max_gap_seconds = 45
 
 [work]
-# Minimum away span (minutes) counted as a work break in the timeline. Shorter
+# Minimum away span (minutes) counted as a work break inside a session. Shorter
 # away gaps are folded into continuous work. Used by `active-lens timeline`.
 # break_minutes = 10
+
+# Away span (minutes) that ends a work session. Longer absences — a night's
+# sleep, an afternoon out — separate two sessions rather than being a "break"
+# inside one. Must exceed break_minutes.
+# session_gap_minutes = 240
+
+# Local hour (0-23) a logical day begins at. Activity before it is filed under
+# the previous day, so an evening that runs past midnight stays on the day it
+# started. Set to 0 for calendar days.
+# day_start_hour = 4
 
 [storage]
 # Where raw samples are stored. Point this at an iCloud Drive / Dropbox folder

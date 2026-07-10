@@ -49,6 +49,7 @@ active-lens install   # daemon を実行する launchd LaunchAgent を登録
 
 ```
 active-lens daemon                 常駐サンプラー（通常は launchd 経由）
+active-lens now      [--json]      いま続いているセッション
 active-lens today    [--json]      今日の 操作中/閲覧のみ/離席 合計
 active-lens timeline [flags]       勤務ログ：始業/終業/休憩を日別に
 active-lens report   [flags]       期間集計
@@ -59,27 +60,68 @@ active-lens install | uninstall    ログイン用 LaunchAgent の登録/解除
 active-lens version
 ```
 
+### セッションと論理日
+
+**セッション**とは、途切れずに続いた一連の作業です。`work.session_gap_minutes`
+（既定 4 時間）以上の離席——一晩の睡眠、午後の外出——でセッションは終わります。
+それより短い離席はセッションの内側に留まり、`work.break_minutes`（既定 10 分）
+以上のものが**休憩**、それより短いものは連続稼働に畳み込まれます。*操作中* と
+*閲覧のみ* の両方を「在席」とみなします。
+
+セッションは深夜 0 時で分割されません。**論理日**——00:00 ではなく
+`work.day_start_hour`（既定 04:00）に始まる日——のうち、それが始まった日へ、
+丸ごと帰属します。ですから 00:59 まで続いた夜はその夜のものであり、翌朝は
+実際に机に向かった時刻から始まります。セッション間の睡眠は休憩ではなく、
+午前と夜のセッションを隔てる 5 時間の空白もまた休憩ではありません。
+
+### now（いまのセッション）
+
+```sh
+active-lens now
+active-lens now --json      # GUI のメニューバー向け
+```
+
+```
+Session  20:44 → 00:59   (open)
+  active     3h 53m   (operating 3h 01m, present 52m)
+  breaks     2 · 22m
+               21:51–22:01 (10m)
+               22:30–22:41 (11m)
+  today      3h 53m   (2026-07-09)
+
+Currently operating · recording
+```
+
+直近の活動からセッションギャップ未満しか経っていなければセッションは `open`、
+open だが今まさに離席中なら `paused` です。離席から 30 分の時点では、それが休憩なのか
+一日の終わりなのかまだ誰にも言えないので、セッションは open のままです。離席が
+ギャップを超えた時点で closed になります。セッションの**開始時刻は決して変わりません**。
+変わるのは `open` だけです。
+
 ### timeline（勤務ログ）
 
-生サンプルから、その日 **いつ** マシンに向かっていたか——始業・休憩・終業——を再構成
-します。
+生サンプルから、論理日ごとに **いつ** マシンに向かっていたか——各セッションの始業・
+休憩・終業——を再構成します。
 
 ```sh
 active-lens timeline                                   # 直近7日
+active-lens timeline --days 30                         # 直近30論理日
 active-lens timeline --since 2026-07-01 --until 2026-07-08
 active-lens timeline --json                            # GUI 向け
 ```
 
 ```
-2026-07-09   09:32 → 18:47   active 6h 40m   · 2 break(s) 1h 05m
-    break 12:05–12:58 (53m)
-    break 15:30–15:42 (12m)
+2026-07-09   20:44 → 00:59 (+1d)   active 3h 53m   · 2 break(s) 22m
+    break 21:51–22:01 (10m)
+    break 22:30–22:41 (11m)
+
+2026-07-10   07:26 → 10:42   active 2h 40m
 ```
 
-**休憩**は、その日の最初と最後の在席の間にある `work.break_minutes`（既定10分）以上の
-離席です。それより短い離席は連続稼働に畳み込まれます。*操作中* と *閲覧のみ* の両方を
-「在席」とみなします。`--json` 出力には各日の色付きスパン（タイムライン表示用）と、
-導出した `work_start` / `work_end` / `breaks` が含まれます。
+`(+1d)` は深夜 0 時をまたいで終わったセッションを示します。`--json` 出力には各日の
+色付きスパン（タイムライン表示用）、`sessions` と `blocks`、そして導出した
+`work_start` / `work_end` / `breaks` が含まれます。`--since` の日付を自分で計算するより
+`--days N` を使ってください。境界を含めて論理日で範囲を解決します。
 
 ### report / today
 
@@ -90,6 +132,13 @@ active-lens report --json           # GUI 向けの機械可読出力
 ```
 
 `--until` は当日を含みます。フラグ無しの `report` は直近 7 日間を対象にします。
+日バケットは論理日なので、01:00 に叩いた `today` は、いま自分がその只中にいる夜を
+そのまま報告します。時間帯ヒートマップは実時刻の時間帯を保ちます。
+
+なお `report` は各**秒**をそれが属する論理日へ、`timeline` は各**セッション**を
+それが始まった日へ帰属させます。両者はセッションが `day_start_hour` を貫くときにのみ
+食い違い、徹夜は `timeline` では開始日に全量が乗り、`report` では 2 日に分かれます。
+これは稼働ログと合計台帳の差です。
 
 出力例：
 
@@ -120,7 +169,9 @@ active-lens export --format json --since 2026-07-01 > activity.json
 | `sampling.interval_seconds` | `15` | デーモンのサンプリング間隔 |
 | `sampling.active_threshold_seconds` | `30` | 操作中/閲覧のみ を分けるアイドル閾値 |
 | `sampling.max_gap_seconds` | `interval × 3` | ギャップ上限。超過は離席（スリープ）扱い |
-| `work.break_minutes` | `10` | タイムラインで休憩とみなす最小離席（分） |
+| `work.break_minutes` | `10` | セッション内で休憩とみなす最小離席（分） |
+| `work.session_gap_minutes` | `240` | セッションを終わらせる離席（分）。`break_minutes` より大きいこと |
+| `work.day_start_hour` | `4` | 論理日が始まるローカル時刻。`0` でカレンダー日 |
 | `storage.db_path` | データディレクトリ | サンプル保存先。iCloud/Dropbox 配下で緩い同期 |
 
 解決値は `active-lens doctor` で確認できます。

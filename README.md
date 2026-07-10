@@ -50,6 +50,7 @@ location you intend to keep it.
 
 ```
 active-lens daemon                 Run the resident sampler (usually via launchd)
+active-lens now      [--json]      The session you are in right now
 active-lens today    [--json]      Today's operating / present / away totals
 active-lens timeline [flags]       Work log: start / end / breaks per day
 active-lens report   [flags]       Aggregate a date range
@@ -60,28 +61,70 @@ active-lens install | uninstall    Register / remove the login LaunchAgent
 active-lens version
 ```
 
+### Sessions and logical days
+
+A **session** is one unbroken stretch of work. It ends when you are away for at
+least `work.session_gap_minutes` (default 4 hours) — a night's sleep, an
+afternoon out. Shorter absences stay inside the session: those of at least
+`work.break_minutes` (default 10) are **breaks**, and anything shorter folds into
+continuous work. Both *operating* and *present* count as "at the machine".
+
+A session is never split at midnight. It is filed, whole, under the **logical
+day** it started in — the day that begins at `work.day_start_hour` (default
+04:00) rather than at 00:00. So an evening that runs to 00:59 belongs to the
+evening, and the following morning starts when you actually sit down, not at
+00:00. Sleeping between two sessions is not a break, and neither is a five-hour
+gap between a morning and an evening session.
+
+### now (the current session)
+
+```sh
+active-lens now
+active-lens now --json      # for the GUI's menu bar
+```
+
+```
+Session  20:44 → 00:59   (open)
+  active     3h 53m   (operating 3h 01m, present 52m)
+  breaks     2 · 22m
+               21:51–22:01 (10m)
+               22:30–22:41 (11m)
+  today      3h 53m   (2026-07-09)
+
+Currently operating · recording
+```
+
+The session is `open` while your last activity is less than a session gap old,
+and `paused` when it is open but you are away right now. Thirty minutes into an
+absence nothing can yet say whether it is a break or the end of the day, so the
+session stays open; once the absence passes the gap it closes. A session's
+**start never changes** — only `open` flips.
+
 ### timeline (work log)
 
-Reconstructs, per day, **when** you were at the machine — the derived start,
-breaks, and end of your work session — from the raw samples.
+Reconstructs, per logical day, **when** you were at the machine — the derived
+start, breaks, and end of each work session — from the raw samples.
 
 ```sh
 active-lens timeline                                   # last 7 days
+active-lens timeline --days 30                         # last 30 logical days
 active-lens timeline --since 2026-07-01 --until 2026-07-08
 active-lens timeline --json                            # for the GUI
 ```
 
 ```
-2026-07-09   09:32 → 18:47   active 6h 40m   · 2 break(s) 1h 05m
-    break 12:05–12:58 (53m)
-    break 15:30–15:42 (12m)
+2026-07-09   20:44 → 00:59 (+1d)   active 3h 53m   · 2 break(s) 22m
+    break 21:51–22:01 (10m)
+    break 22:30–22:41 (11m)
+
+2026-07-10   07:26 → 10:42   active 2h 40m
 ```
 
-A **break** is an away span of at least `work.break_minutes` (default 10) between
-the day's first and last active moment; shorter away gaps fold into continuous
-work. Both *operating* and *present* count as "at the machine". The `--json`
-output includes each day's colored spans (for a timeline view) plus the derived
-`work_start` / `work_end` / `breaks`.
+`(+1d)` marks a session that ended after midnight. The `--json` output includes
+each day's colored spans (for a timeline view), its `sessions` and `blocks`, and
+the derived `work_start` / `work_end` / `breaks`. Prefer `--days N` over
+computing a `--since` date yourself: it resolves the range against the logical
+day, boundary included.
 
 ### report / today
 
@@ -91,7 +134,15 @@ active-lens report --since 2026-07-01 --until 2026-07-08
 active-lens report --json           # machine-readable, for the GUI
 ```
 
-`--until` is inclusive. With no flags, `report` covers the last 7 days.
+`--until` is inclusive. With no flags, `report` covers the last 7 days. Day
+buckets are logical days, so `today` at 01:00 still reports the evening you are
+in the middle of. The hour-of-day heatmap keeps real wall-clock hours.
+
+Note that `report` attributes each *second* to the logical day it falls in, while
+`timeline` attributes a whole *session* to the day it started in. The two agree
+except when a session runs through `day_start_hour` — an all-nighter counts
+entirely on its starting day in `timeline`, and splits across two in `report`.
+That is the difference between a work log and a totals ledger.
 
 Example:
 
@@ -122,7 +173,9 @@ Optional `config.toml` in `~/Library/Application Support/active-lens/`
 | `sampling.interval_seconds` | `15` | How often the daemon samples |
 | `sampling.active_threshold_seconds` | `30` | Idle cutoff for operating vs present |
 | `sampling.max_gap_seconds` | `interval × 3` | Gap cap; excess counts as away (sleep) |
-| `work.break_minutes` | `10` | Min away span counted as a break in the timeline |
+| `work.break_minutes` | `10` | Min away span counted as a break inside a session |
+| `work.session_gap_minutes` | `240` | Away span that ends a session; must exceed `break_minutes` |
+| `work.day_start_hour` | `4` | Local hour a logical day begins; `0` for calendar days |
 | `storage.db_path` | data dir | Where samples live; point at iCloud/Dropbox for loose sync |
 
 Run `active-lens doctor` to see what resolved.

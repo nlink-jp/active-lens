@@ -103,12 +103,12 @@ func TestByHourOfDay_SleepSpansManyHours(t *testing.T) {
 
 func TestByDay_SplitsAcrossMidnight(t *testing.T) {
 	// Gap straddling midnight: 30 min before, 30 min after (with a large maxGap so
-	// it is all credited to the start state).
+	// it is all credited to the start state). day_start_hour 0 => calendar days.
 	samples := []activity.Sample{
 		samp("2026-07-09 23:30:00", activity.Present),
 		samp("2026-07-10 00:30:00", activity.Present),
 	}
-	days := ByDay(samples, 2*time.Hour, utc)
+	days := ByDay(samples, 2*time.Hour, utc, 0)
 	if len(days) != 2 {
 		t.Fatalf("got %d days, want 2", len(days))
 	}
@@ -117,6 +117,37 @@ func TestByDay_SplitsAcrossMidnight(t *testing.T) {
 	}
 	if days[1].Date != "2026-07-10" || days[1].Totals.Present != 30*time.Minute {
 		t.Errorf("day1 = %+v, want 2026-07-10 present=30m", days[1])
+	}
+}
+
+func TestByDay_LogicalDayKeepsMidnightTogether(t *testing.T) {
+	// The same hour, bucketed on a logical day starting at 04:00: both halves are
+	// still "the 9th", because the 10th has not begun yet.
+	samples := []activity.Sample{
+		samp("2026-07-09 23:30:00", activity.Present),
+		samp("2026-07-10 00:30:00", activity.Present),
+	}
+	days := ByDay(samples, 2*time.Hour, utc, 4)
+	if len(days) != 1 {
+		t.Fatalf("got %d days, want 1: %+v", len(days), days)
+	}
+	if days[0].Date != "2026-07-09" || days[0].Totals.Present != time.Hour {
+		t.Errorf("day0 = %+v, want 2026-07-09 present=1h", days[0])
+	}
+}
+
+func TestByDay_LogicalBoundaryStartsANewDay(t *testing.T) {
+	// Crossing 04:00 does split, because that is where the logical day turns over.
+	samples := []activity.Sample{
+		samp("2026-07-10 03:30:00", activity.Operating),
+		samp("2026-07-10 04:30:00", activity.Operating),
+	}
+	days := ByDay(samples, 2*time.Hour, utc, 4)
+	if len(days) != 2 {
+		t.Fatalf("got %d days, want 2: %+v", len(days), days)
+	}
+	if days[0].Date != "2026-07-09" || days[1].Date != "2026-07-10" {
+		t.Errorf("dates = %s, %s, want 07-09, 07-10", days[0].Date, days[1].Date)
 	}
 }
 

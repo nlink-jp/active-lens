@@ -10,8 +10,36 @@ func TestDefaults(t *testing.T) {
 	if c.BreakMinutes != 10 {
 		t.Errorf("BreakMinutes = %d, want 10", c.BreakMinutes)
 	}
+	if c.SessionGapMinutes != 240 || c.DayStartHour != 4 {
+		t.Errorf("session gap / day start = %d / %d, want 240 / 4", c.SessionGapMinutes, c.DayStartHour)
+	}
 	if c.DBPath != "/data/activity.db" {
 		t.Errorf("DBPath = %q", c.DBPath)
+	}
+}
+
+func TestApply_WorkOverrides(t *testing.T) {
+	toml := "[work]\nbreak_minutes = 5\nsession_gap_minutes = 90\nday_start_hour = 0\n"
+	c, err := apply(Defaults("/data"), []byte(toml))
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if c.BreakMinutes != 5 || c.SessionGapMinutes != 90 || c.DayStartHour != 0 {
+		t.Errorf("work config = %+v", c)
+	}
+}
+
+func TestApply_SessionGapMustExceedBreak(t *testing.T) {
+	// Otherwise every break would also end the session it sits in, and no session
+	// could ever contain one.
+	for _, bad := range []string{
+		"[work]\nbreak_minutes = 30\nsession_gap_minutes = 30\n",
+		"[work]\nbreak_minutes = 30\nsession_gap_minutes = 10\n",
+		"[work]\nbreak_minutes = 600\n", // above the 240-minute default gap
+	} {
+		if _, err := apply(Defaults("/data"), []byte(bad)); err == nil {
+			t.Errorf("apply(%q) = nil error, want error", bad)
+		}
 	}
 }
 
@@ -61,6 +89,9 @@ func TestApply_Invalid(t *testing.T) {
 		"[sampling]\ninterval_seconds = -5\n",
 		"[sampling]\nactive_threshold_seconds = nope\n",
 		"[sampling]\nmax_gap_seconds = zero\n",
+		"[work]\nday_start_hour = 24\n",
+		"[work]\nday_start_hour = -1\n",
+		"[work]\nsession_gap_minutes = 0\n",
 	} {
 		if _, err := apply(Defaults("/data"), []byte(bad)); err == nil {
 			t.Errorf("apply(%q) = nil error, want error", bad)

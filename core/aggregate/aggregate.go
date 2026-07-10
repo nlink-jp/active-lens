@@ -40,7 +40,7 @@ func (t *Totals) add(st activity.State, d time.Duration) {
 	}
 }
 
-// DayTotals is a single day's totals, keyed by the local calendar date.
+// DayTotals is a single logical day's totals, keyed by its date.
 type DayTotals struct {
 	Date   string // "YYYY-MM-DD" in the aggregation location
 	Totals Totals
@@ -105,11 +105,17 @@ func Range(samples []activity.Sample, maxGap time.Duration, loc *time.Location) 
 	return tot
 }
 
-// ByDay returns per-day totals, sorted ascending by date.
-func ByDay(samples []activity.Sample, maxGap time.Duration, loc *time.Location) []DayTotals {
+// ByDay returns per-logical-day totals, sorted ascending by date. Each second is
+// attributed to the logical day it falls in — unlike Timeline, which attributes a
+// whole session to the day it started in. The two agree except when a session
+// crosses a logical day boundary.
+//
+// Intervals are already split at hour boundaries and dayStartHour is a whole
+// hour, so no piece straddles a boundary and only the bucket key changes.
+func ByDay(samples []activity.Sample, maxGap time.Duration, loc *time.Location, dayStartHour int) []DayTotals {
 	byKey := map[string]*Totals{}
 	walkSegments(samples, maxGap, loc, func(start time.Time, d time.Duration, st activity.State) {
-		key := start.Format("2006-01-02")
+		key := LogicalDate(start, dayStartHour)
 		t := byKey[key]
 		if t == nil {
 			t = &Totals{}

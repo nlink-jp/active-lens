@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nlink-jp/active-lens/core/activity"
+	"github.com/nlink-jp/active-lens/core/aggregate"
 	"github.com/nlink-jp/active-lens/core/config"
 	"github.com/nlink-jp/active-lens/core/platform"
 	"github.com/nlink-jp/active-lens/core/sampler"
@@ -33,6 +34,25 @@ func loadConfig() (config.Config, error) {
 		return config.Config{}, err
 	}
 	return config.Load(cfgPath, dataDir)
+}
+
+// paramsOf lifts the derivation knobs out of config. They are applied here, not
+// at record time, so the stored history re-derives whenever they change.
+func paramsOf(cfg config.Config) aggregate.Params {
+	return aggregate.Params{
+		MaxGap:         time.Duration(cfg.MaxGapSeconds) * time.Second,
+		BreakThreshold: time.Duration(cfg.BreakMinutes) * time.Minute,
+		SessionGap:     time.Duration(cfg.SessionGapMinutes) * time.Minute,
+		DayStartHour:   cfg.DayStartHour,
+	}
+}
+
+// staleAfter is how long a sample drought means recording has stopped.
+func staleAfter(cfg config.Config) time.Duration {
+	if d := time.Duration(cfg.IntervalSeconds*4) * time.Second; d > time.Minute {
+		return d
+	}
+	return time.Minute
 }
 
 // --- daemon ---------------------------------------------------------------
@@ -67,6 +87,46 @@ func runDaemon(args []string) error {
 	return nil
 }
 
+// --- now ------------------------------------------------------------------
+
+// nowWindow is how far back `now` reads samples. A session is bounded below 48h
+// by the backstop, and the absence that opened it is at most one session_gap
+// longer, so 72h provably contains the whole now-session.
+const nowWindow = 72 * time.Hour
+
+func runNow(args []string) error {
+	fs := flag.NewFlagSet("now", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	loc := time.Local
+	now := time.Now().In(loc)
+	samples, err := st.Query(now.Add(-nowWindow), now)
+	if err != nil {
+		return err
+	}
+	n := buildNow(samples, now, staleAfter(cfg), paramsOf(cfg), loc)
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(n)
+	}
+	printNowHuman(os.Stdout, n)
+	return nil
+}
+
 // --- today / report -------------------------------------------------------
 
 func runToday(args []string) error {
@@ -75,10 +135,14 @@ func runToday(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
 	loc := time.Local
 	now := time.Now().In(loc)
-	since := startOfDay(now)
-	return emitReport(os.Stdout, since, now, loc, *asJSON)
+	since := aggregate.LogicalDayStart(now, cfg.DayStartHour)
+	return emitReport(os.Stdout, cfg, since, now, loc, *asJSON)
 }
 
 func runReport(args []string) error {
@@ -89,31 +153,43 @@ func runReport(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	loc := time.Local
-	since, until, err := resolveRange(*sinceStr, *untilStr, loc)
+	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	return emitReport(os.Stdout, since, until, loc, *asJSON)
+	loc := time.Local
+	since, until, err := resolveRange(*sinceStr, *untilStr, loc, cfg.DayStartHour)
+	if err != nil {
+		return err
+	}
+	return emitReport(os.Stdout, cfg, since, until, loc, *asJSON)
 }
 
 func runTimeline(args []string) error {
 	fs := flag.NewFlagSet("timeline", flag.ContinueOnError)
 	sinceStr := fs.String("since", "", "start date YYYY-MM-DD (default: 7 days ago)")
 	untilStr := fs.String("until", "", "end date YYYY-MM-DD, inclusive (default: today)")
+	days := fs.Int("days", 0, "the last N logical days, ending now (overrides --since/--until)")
 	asJSON := fs.Bool("json", false, "emit JSON")
 	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	loc := time.Local
-	since, until, err := resolveRange(*sinceStr, *untilStr, loc)
-	if err != nil {
 		return err
 	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
+	loc := time.Local
+
+	var since, until time.Time
+	if *days > 0 {
+		since, until, err = resolveLastDays(*days, loc, cfg.DayStartHour)
+	} else {
+		since, until, err = resolveRange(*sinceStr, *untilStr, loc, cfg.DayStartHour)
+	}
+	if err != nil {
+		return err
+	}
+
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
 		return err
@@ -123,16 +199,14 @@ func runTimeline(args []string) error {
 	if err != nil {
 		return err
 	}
-	maxGap := time.Duration(cfg.MaxGapSeconds) * time.Second
-	breakThreshold := time.Duration(cfg.BreakMinutes) * time.Minute
-	tl := buildTimeline(samples, since, until, maxGap, breakThreshold, loc)
+	tl := buildTimeline(samples, since, until, paramsOf(cfg), loc)
 
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(tl)
 	}
-	printTimelineHuman(os.Stdout, tl)
+	printTimelineHuman(os.Stdout, tl, loc)
 	if tl.SampleCount == 0 {
 		fmt.Println("\nNo samples in this range. Is the daemon running? Try: active-lens status")
 	}
@@ -140,11 +214,7 @@ func runTimeline(args []string) error {
 }
 
 // emitReport queries the window, aggregates, and writes human or JSON output.
-func emitReport(w io.Writer, since, until time.Time, loc *time.Location, asJSON bool) error {
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
+func emitReport(w io.Writer, cfg config.Config, since, until time.Time, loc *time.Location, asJSON bool) error {
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
 		return err
@@ -156,7 +226,7 @@ func emitReport(w io.Writer, since, until time.Time, loc *time.Location, asJSON 
 		return err
 	}
 	maxGap := time.Duration(cfg.MaxGapSeconds) * time.Second
-	rep := buildReport(samples, since, until, maxGap, loc)
+	rep := buildReport(samples, since, until, maxGap, loc, cfg.DayStartHour)
 
 	if asJSON {
 		enc := json.NewEncoder(w)
@@ -183,12 +253,12 @@ func runExport(args []string) error {
 	if *format != "csv" && *format != "json" {
 		return fmt.Errorf("--format must be csv or json, got %q", *format)
 	}
-	loc := time.Local
-	since, until, err := resolveRange(*sinceStr, *untilStr, loc)
+	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	cfg, err := loadConfig()
+	loc := time.Local
+	since, until, err := resolveRange(*sinceStr, *untilStr, loc, cfg.DayStartHour)
 	if err != nil {
 		return err
 	}
@@ -346,6 +416,9 @@ func runDoctor(args []string) error {
 	fmt.Printf("DB path:     %s\n", cfg.DBPath)
 	fmt.Printf("Interval:    %ds\nThreshold:   %.0fs\nMaxGap:      %ds\n",
 		cfg.IntervalSeconds, cfg.ActiveThresholdSeconds, cfg.MaxGapSeconds)
+	// These three decide how the work log reads, so surface what resolved.
+	fmt.Printf("Break:       %dm\nSessionGap:  %dm\nDayStart:    %02d:00\n",
+		cfg.BreakMinutes, cfg.SessionGapMinutes, cfg.DayStartHour)
 
 	fmt.Print("Signals:     ")
 	snap, serr := signal.NewSampler().Snapshot()

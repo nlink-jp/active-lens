@@ -15,8 +15,9 @@ Usage:
 
 Commands:
   daemon                 Run the resident sampler (records to the local DB)
+  now     [--json]       The session you are in right now: start, active, breaks
   today   [--json]       Show today's operating / present / away totals
-  timeline [flags]       Work log: start / end / breaks per day (--since --until --json)
+  timeline [flags]       Work log: start / end / breaks per day (--since --until --days --json)
   report  [flags]        Aggregate a date range (--since --until --json)
   export  [flags]        Export raw samples (--format csv|json)
   status                 Show daemon state, DB path, and last sample
@@ -42,6 +43,8 @@ func Execute(version string) {
 	switch cmd {
 	case "daemon":
 		err = runDaemon(rest)
+	case "now":
+		err = runNow(rest)
 	case "today":
 		err = runToday(rest)
 	case "timeline":
