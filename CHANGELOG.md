@@ -6,6 +6,8 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-10
+
 ### Changed
 
 - **Work days are now derived from sessions, not from calendar midnight.** A
@@ -68,5 +70,6 @@ All notable changes to active-lens are documented here. The format follows
 - `config.toml` for sampling interval, active threshold, gap cap, and DB path
   (minimal hand-rolled parser, no external dependency).
 
-[Unreleased]: https://github.com/nlink-jp/active-lens/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/nlink-jp/active-lens/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nlink-jp/active-lens/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nlink-jp/active-lens/releases/tag/v0.1.0
