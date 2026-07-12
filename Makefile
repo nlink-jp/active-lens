@@ -26,7 +26,7 @@ build:
 build-all:
 	@mkdir -p $(DIST_DIR)
 	GOARCH=arm64 go build $(LDFLAGS) -o $(DIST_DIR)/$(BINARY)-darwin-arm64 .
-	@scripts/codesign-darwin.sh $(DIST_DIR)/$(BINARY)-darwin-arm64 "$(CODESIGN_IDENTITY)"
+	@scripts/codesign-darwin.sh $(DIST_DIR)/$(BINARY)-darwin-arm64 "$(CODESIGN_IDENTITY)" "$(BINARY)"
 
 ## package: build, zip (with README.md and the canonical binary name inside),
 ## and notarize. Matches the release asset naming:
@@ -35,12 +35,11 @@ package: build-all
 	@cd $(DIST_DIR) && for f in $(BINARY)-darwin-*; do \
 		case "$$f" in *.zip) continue ;; esac; \
 		suffix=$${f#$(BINARY)-}; \
-		cp ../README.md .; \
-		stage="_pkg"; rm -rf "$$stage"; mkdir -p "$$stage"; \
+		stage=_pkg; rm -rf $$stage; mkdir -p $$stage; \
 		cp "$$f" "$$stage/$(BINARY)"; \
-		zip -j "$(BINARY)-$(VERSION)-$${suffix}.zip" "$$stage/$(BINARY)" README.md; \
-		rm -rf "$$stage"; \
-		rm -f README.md; \
+		cp ../README.md ../LICENSE $$stage/; \
+		( cd $$stage && zip -q "../$(BINARY)-$(VERSION)-$$suffix.zip" * ); \
+		rm -rf $$stage; \
 	done
 	@scripts/notarize-darwin.sh $(DIST_DIR)/$(BINARY)-$(VERSION)-darwin-arm64.zip "$(NOTARY_PROFILE)"
 
