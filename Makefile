@@ -56,3 +56,10 @@ vet:
 ## clean: remove build artifacts
 clean:
 	rm -rf $(DIST_DIR)
+
+# Homebrew tap generation (see scripts/release-brew.mk). After `make package`,
+# `make brew` generates this formula from the built darwin-arm64 zip into the
+# local nlink-jp/homebrew-tap checkout. The package target is unchanged.
+BREW_KIND := formula
+BREW_DESC := Content-free activity tracker recording when you work, not what
+include scripts/release-brew.mk
