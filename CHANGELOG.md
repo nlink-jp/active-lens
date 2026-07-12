@@ -4,7 +4,16 @@ All notable changes to active-lens are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] - 2026-07-12
+
+### Changed
+
+- **`LICENSE` is now bundled** in the release archive alongside `README.md`,
+  per `nlink-jp/.github` CONVENTIONS.md §Release Archive Standard.
+- **darwin code-signature identifier** is now the canonical `active-lens`
+  (previously the build-time `active-lens-darwin-arm64`).
+
+Packaging-only release; no change to the binary's behaviour.
 
 ## [0.2.0] - 2026-07-10
 
