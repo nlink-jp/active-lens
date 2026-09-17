@@ -141,8 +141,9 @@ active-lens timeline --json                            # GUI 向け
 2026-07-10   07:26 → 10:42   active 2h 40m
 ```
 
-`(+1d)` は深夜 0 時をまたいで終わったセッションを示し、ヘッダにはどの `day_boundary`
-規則で導出したかが出ます。`strict` では境界を跨いだ日に `continues into next day` /
+`(+1d)` は深夜 0 時をまたいで終わったセッションを示します。`strict` のときはヘッダに
+その旨が出ます（既定の規則は告知しません。これまでのログがすべてそれで導出されて
+きたものだからです）。`strict` では境界を跨いだ日に `continues into next day` /
 `continues from previous day` が付き、切断が几帳面な始業・終業と取り違えられることが
 ありません。`--json` 出力には各日の色付きスパン（タイムライン表示用）、`sessions` と
 `blocks`、導出した `work_start` / `work_end` / `breaks`、そして

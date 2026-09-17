@@ -55,9 +55,11 @@ Two consequences follow directly:
 
 - `timeline`'s day totals become equal to `report`'s day totals. The divergence
   of ADR 0001 §5 exists only in `session` mode.
-- A session can no longer exceed 24h, so the §2.4 backstop can never fire. It is
-  kept rather than made conditional: it is the same mechanism with a different
-  limit, and one code path is cheaper than two.
+- A session can no longer outlive the logical day it is filed under, so the §2.4
+  backstop can never fire. The backstop is kept rather than made conditional: it
+  is the same mechanism with a different limit, and one code path is cheaper than
+  two. (A logical day is 24h except across a daylight-saving change, where the
+  boundary is a wall-clock hour and the day is 23 or 25 — see §5.)
 
 ### 2.3 The now-session follows the same rule
 
@@ -66,8 +68,11 @@ progress becomes a new session and the figure returns to `0s`. This is not a
 side effect to be papered over — it is the point. In a workplace with a defined
 day, the number worth glancing at is the one that will be counted against today.
 
-`now`'s `day` figure is the logical day of the current session's start, which
-under `strict` is always the logical day `now` falls in.
+`now`'s `day` figure remains the logical day of the current session's start. Under
+`strict` that session cannot straddle a boundary, so the figure is always the day
+the session itself belongs to. It is not necessarily the day `now` falls in: after
+a night's sleep, before any new activity, the current session is still yesterday's
+last one, exactly as under ADR 0001.
 
 ### 2.4 Cuts are labelled, not hidden: `carried_in` / `carried_out`
 
@@ -114,11 +119,14 @@ changes without a compatibility shim.
 
 - `timeline --json`: root gains `day_boundary`; every day and every session gain
   `carried_in` and `carried_out`.
-- `now --json`: the session gains `carried_in` and `carried_out`, so the menu bar
-  can explain a `0s` heading ("the day turned over at 05:00") instead of looking
-  like it lost the session.
+- `now --json`: the session gains `carried_in`, so the menu bar can explain a `0s`
+  heading ("the day turned over at 05:00") instead of looking like it lost the
+  session. There is no `carried_out` here: a session the boundary cut is never the
+  current one, since the work continued into the session opened at that instant.
 - `status --json`: gains `day_start_hour` and `day_boundary`.
-- `timeline` (human): the header states the mode; a carried day appends
+- `timeline` (human): the header states the mode when it is not the default — the
+  default rule is not news, and a line printed every run is a line nobody reads;
+  `doctor` answers it on demand. A carried day appends
   `· continues from previous day` / `· continues into next day` to its work-log
   line. Plain words, no glyphs — the line is already `→` and `·` dense.
 
@@ -137,6 +145,20 @@ That is what a strict boundary means.
 
 **Raw samples are untouched.** Switching modes re-derives everything already
 recorded; there is nothing to migrate and nothing to lose by trying it.
+
+**Daylight saving bends the day, as it must.** The boundary is a wall-clock hour,
+so across a DST change the logical day is 23 or 25 hours long and a `strict`
+session may run to 25h. Seconds are still conserved and both ledgers still agree;
+only the "24h" in the sentences above is approximate. Where the configured hour
+does not exist on a spring-forward day, Go resolves it to the nearest real
+instant, which puts that one boundary an hour off. Japan has no DST; this is a
+caveat for other zones, not a defect being papered over.
+
+**Reading a window means reading before it.** A session that began before the
+first instant of a `--days N` range must be derived whole, or the range's oldest
+day reports a cut as a real start. The timeline path therefore queries the store
+from `since − (48h + session_gap)` — the span that provably contains any session
+touching that instant — and emits only the days inside the range.
 
 ## 6. Alternatives rejected
 
@@ -164,6 +186,13 @@ Table-driven in `core/aggregate`, alongside the ADR 0001 cases.
 
 - `strict`: a session crossing the boundary is cut there; the halves file under
   their own logical days; their totals sum to the uncut session's.
+- `strict` and `session`: the cut also happens when the boundary falls *between*
+  two segments — a state change or a `max_gap` split landing exactly on the hour —
+  and the limit advances afterwards, so no later boundary is missed either. This
+  is the case that a `seg.Start < boundary < seg.End` test alone silently skips.
+- The oldest day of a window keeps its `carried_in`: the derivation reads the
+  stream from before the range it displays, and `sample_count` still counts only
+  the samples inside the range.
 - `strict`: the head's `End` is the boundary with `carried_out`, the tail's
   `Start` is the boundary with `carried_in`.
 - `strict`: away across the boundary sets neither flag; each day still begins and
@@ -174,4 +203,5 @@ Table-driven in `core/aggregate`, alongside the ADR 0001 cases.
   sets `carried_out` / `carried_in`.
 - config: both spellings parse; any other value is an error; unset is `session`.
 - `now` under `strict`: the session starts at the boundary, `active_seconds`
-  restarts, `carried_in` is true, and `day.date` is the logical day `now` is in.
+  restarts, `carried_in` is true, and `day.date` is the logical day that session
+  belongs to.

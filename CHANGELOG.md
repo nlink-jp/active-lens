@@ -15,17 +15,32 @@ All notable changes to active-lens are documented here. The format follows
   working day is defined for you. See
   [ADR 0002](docs/en/adr/0002-configurable-day-boundary.md).
 - **`carried_in` / `carried_out`** on every session and day in
-  `timeline --json` and `now --json`: whether that end is a boundary cut rather
-  than a real start or finish. Set in `"session"` mode too, for the backstop cut
-  at the second boundary. The human `timeline` prints `continues from previous
-  day` / `continues into next day`, and its header now states which
-  `day_boundary` rule produced the log.
+  `timeline --json`, and `carried_in` on `now --json`'s session: whether that end
+  is a boundary cut rather than a real start or finish. Set in `"session"` mode
+  too, for the backstop cut at the second boundary. The human `timeline` prints
+  `continues from previous day` / `continues into next day`, and states the
+  `day_boundary` rule in its header when it is not the default.
 - `timeline --json` publishes `day_boundary`; `status --json` publishes
   `day_start_hour` and `day_boundary`; `doctor` prints the mode and what it means.
 
+### Fixed
+
+- **A day boundary landing exactly between two segments was never applied.** The
+  cut was only looked for *inside* a segment, so a state change — or a `max_gap`
+  split — falling exactly on the hour slipped through, and the missed boundary
+  stayed the session's limit, which is never reached again. Under the default
+  rule this let ADR 0001's backstop miss its cut entirely: a Mac held awake could
+  produce one session of unbounded length instead of one bounded at two logical
+  days. Whether it happened at all depended on the phase of the daemon's sampling
+  tick against the hour, so it failed silently and intermittently.
+- **`timeline` now reads the sample stream from before the window it displays**
+  (`since − (48h + session_gap)`), so the oldest day of a `--days N` range is
+  derived from the whole session it belongs to. `sample_count` still counts only
+  the samples inside the range.
+
 ### Changed
 
-- Nothing, unless you set `work.day_boundary = "strict"`. The default keeps
+- Nothing else, unless you set `work.day_boundary = "strict"`. The default keeps
   ADR 0001's attribution, so existing history reads exactly as before. Both modes
   derive from the same raw samples: switching re-reads all recorded history,
   with no migration.

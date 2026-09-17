@@ -100,10 +100,18 @@ func runDaemon(args []string) error {
 
 // --- now ------------------------------------------------------------------
 
-// nowWindow is how far back `now` reads samples. A session is bounded below 48h
-// by the backstop, and the absence that opened it is at most one session_gap
-// longer, so 72h provably contains the whole now-session.
-const nowWindow = 72 * time.Hour
+// lookback is how far before a window the sample stream must be read for the
+// sessions inside it to come out the same as they would in a wider range. A
+// session is bounded at 48h by the day-boundary cut, and the absence that opens
+// one is at most a session_gap longer, so this provably contains the whole
+// session that the window's first instant belongs to.
+//
+// Without it, the oldest day of a `--days N` window is derived from a stream
+// that begins exactly at its boundary: work already under way looks like work
+// that started there, and the day loses the carried_in that says otherwise.
+func lookback(cfg config.Config) time.Duration {
+	return 48*time.Hour + time.Duration(cfg.SessionGapMinutes)*time.Minute
+}
 
 func runNow(args []string) error {
 	fs := flag.NewFlagSet("now", flag.ContinueOnError)
@@ -123,7 +131,7 @@ func runNow(args []string) error {
 
 	loc := time.Local
 	now := time.Now().In(loc)
-	samples, err := st.Query(now.Add(-nowWindow), now)
+	samples, err := st.Query(now.Add(-lookback(cfg)), now)
 	if err != nil {
 		return err
 	}
@@ -134,7 +142,7 @@ func runNow(args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(n)
 	}
-	printNowHuman(os.Stdout, n)
+	printNowHuman(os.Stdout, n, lookback(cfg))
 	return nil
 }
 
@@ -206,7 +214,9 @@ func runTimeline(args []string) error {
 		return err
 	}
 	defer st.Close()
-	samples, err := st.Query(since, until)
+	// Read before the window so a session that began earlier is derived whole;
+	// buildTimeline emits only the days inside [since, until].
+	samples, err := st.Query(since.Add(-lookback(cfg)), until)
 	if err != nil {
 		return err
 	}

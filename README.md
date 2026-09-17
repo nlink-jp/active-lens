@@ -145,8 +145,9 @@ active-lens timeline --json                            # for the GUI
 2026-07-10   07:26 → 10:42   active 2h 40m
 ```
 
-`(+1d)` marks a session that ended after midnight, and the header states which
-`day_boundary` rule produced the log. Under `strict`, a day whose work crossed
+`(+1d)` marks a session that ended after midnight. Under `strict` the header says
+so — the default rule is not announced, since it is what every log has always
+been derived under. Also under `strict`, a day whose work crossed
 the boundary is marked `continues into next day` / `continues from previous day`
 so a cut is never mistaken for a punctual start or finish. The `--json` output
 includes each day's colored spans (for a timeline view), its `sessions` and

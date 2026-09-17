@@ -61,6 +61,18 @@ core/
   grow a second derivation. A cut end is marked `CarriedIn`/`CarriedOut` so a
   boundary is never mistaken for a real start or finish, in either mode. See
   `docs/en/adr/0002-configurable-day-boundary.md`.
+- **The boundary falls between segments as often as inside one.** A state change
+  or a `max_gap` split landing exactly on the hour leaves no segment straddling
+  it. `Sessions()` therefore cuts on `!seg.Start.Before(limit)` as well as on a
+  straddling segment; testing only the straddle leaves `limit` behind at a
+  boundary that is never reached again, and the session then runs to the next
+  long absence. Whether it bites depends on the sampling tick's phase, so it
+  fails silently — the regression tests pin several phases on purpose.
+- **A derivation reads further back than it displays.** `timeline` queries from
+  `since - lookback(cfg)` (48h + session_gap) so a session that began before the
+  window is derived whole; `buildTimeline` emits only in-range days and counts
+  only in-range samples. Querying exactly `[since, until]` makes a window's
+  oldest day disagree with the same day in a wider window.
 - **`present` never times out.** `Classify` returns `present` for as long as the
   display is on and the machine unlocked, so a Mac held awake emits an activity
   run that never ends on its own. That is why `Sessions()` has a backstop: under

@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nlink-jp/active-lens/core/activity"
 	"github.com/nlink-jp/active-lens/core/aggregate"
+	"github.com/nlink-jp/active-lens/core/config"
+	"github.com/nlink-jp/active-lens/core/platform"
 )
 
 // testParams mirrors the shipped defaults: 10-minute breaks, a 4-hour session
@@ -429,5 +432,99 @@ func TestBuildNow_StrictRestartsAtTheBoundary(t *testing.T) {
 	}
 	if n.Day.Date != "2026-07-10" {
 		t.Errorf("day = %s, want the logical day now falls in", n.Day.Date)
+	}
+}
+
+func TestBuildTimeline_CarriedInSurvivesTheWindowEdge(t *testing.T) {
+	// The oldest day of a `--days N` window begins exactly at its boundary. Its
+	// work_start is a cut, and only the samples from before the window can say
+	// so — which is why the caller reads back further than it displays.
+	loc := time.UTC
+	since := time.Date(2026, 7, 10, 5, 0, 0, 0, loc) // the window's first instant
+	until := time.Date(2026, 7, 11, 5, 0, 0, 0, loc)
+	samples := workSamples(
+		time.Date(2026, 7, 9, 22, 0, 0, 0, loc), // before the window
+		time.Date(2026, 7, 10, 10, 0, 0, 0, loc), activity.Operating)
+
+	tl := buildTimeline(samples, since, until, testParamsStrict(2*time.Minute), loc)
+	if len(tl.Days) != 1 || tl.Days[0].Date != "2026-07-10" {
+		t.Fatalf("days = %+v, want only the in-window day", tl.Days)
+	}
+	d := tl.Days[0]
+	if !d.CarriedIn {
+		t.Error("carried_in lost at the window edge: 05:00 reads as a real start")
+	}
+	if d.WorkStart != "05:00" || d.ActiveSeconds != 5*3600 {
+		t.Errorf("day = %s → %s active %ds, want 05:00 and 5h", d.WorkStart, d.WorkEnd, d.ActiveSeconds)
+	}
+	// The published count still means "samples in the range asked for".
+	inRange := 0
+	for _, s := range samples {
+		if !s.TS.Before(since) && s.TS.Before(until) {
+			inRange++
+		}
+	}
+	if tl.SampleCount != inRange {
+		t.Errorf("sample_count = %d, want %d (in-window samples, not the read-back stream)",
+			tl.SampleCount, inRange)
+	}
+}
+
+func TestPrintTimelineHuman_DefaultRuleAddsNoBanner(t *testing.T) {
+	// The default attribution is not news, and a line printed on every run is a
+	// line nobody reads. `doctor` answers "which rule am I on" on demand.
+	loc := time.UTC
+	since := time.Date(2026, 7, 9, 4, 0, 0, 0, loc)
+	until := time.Date(2026, 7, 10, 4, 0, 0, 0, loc)
+	samples := workSamples(
+		time.Date(2026, 7, 9, 22, 0, 0, 0, loc),
+		time.Date(2026, 7, 10, 1, 0, 0, 0, loc), activity.Operating)
+
+	var buf bytes.Buffer
+	printTimelineHuman(&buf, buildTimeline(samples, since, until, testParams(2*time.Minute), loc), loc)
+	if out := buf.String(); strings.Contains(out, "day_boundary") {
+		t.Errorf("default run should say nothing about the rule:\n%s", out)
+	}
+}
+
+func TestPrintNowHuman_SaysWhenTheSessionBeganAtTheBoundary(t *testing.T) {
+	loc := time.UTC
+	start := time.Date(2026, 7, 9, 22, 0, 0, 0, loc)
+	last := time.Date(2026, 7, 10, 5, 30, 0, 0, loc)
+	n := buildNow(workSamples(start, last, activity.Operating), last.Add(30*time.Second),
+		time.Minute, testParamsStrict(2*time.Minute), loc)
+
+	var buf bytes.Buffer
+	printNowHuman(&buf, n, 72*time.Hour)
+	out := buf.String()
+	if !strings.Contains(out, "began at the day boundary") {
+		t.Errorf("a 30m heading after a night's work needs its reason:\n%s", out)
+	}
+
+	// The ordinary case says nothing extra.
+	plain := buildNow(workSamples(start, last, activity.Operating), last.Add(30*time.Second),
+		time.Minute, testParams(2*time.Minute), loc)
+	buf.Reset()
+	printNowHuman(&buf, plain, 72*time.Hour)
+	if strings.Contains(buf.String(), "day boundary") {
+		t.Errorf("default rule cut nothing, so nothing to explain:\n%s", buf.String())
+	}
+}
+
+func TestEmitStatusJSON_PublishesTheWorkDayRule(t *testing.T) {
+	cfg := config.Defaults(t.TempDir())
+	cfg.DayStartHour = 5
+	cfg.DayBoundary = config.DayBoundaryStrict
+
+	var buf bytes.Buffer
+	if err := emitStatusJSON(&buf, cfg, platform.DaemonInfo{}, nil); err != nil {
+		t.Fatalf("emitStatusJSON: %v", err)
+	}
+	var got statusJSON
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, buf.String())
+	}
+	if got.DayStartHour != 5 || got.DayBoundary != "strict" {
+		t.Errorf("status = %+v, want day_start_hour 5 and day_boundary strict", got)
 	}
 }
