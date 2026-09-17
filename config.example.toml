@@ -34,6 +34,17 @@
 # started. Set to 0 for calendar days.
 # day_start_hour = 4
 
+# What the day boundary does to a session running across it.
+#   "session" (default) — the session stays whole and counts entirely on the day
+#                         it started: a personal log, where a night's work is one
+#                         piece of work.
+#   "strict"            — the boundary ends the session, so each day is credited
+#                         exactly the hours that fell inside it. Use this where
+#                         the working day is defined for you (a workplace whose
+#                         day starts at 05:00), and set day_start_hour to match.
+# Either way the raw samples are untouched: switching re-derives all history.
+# day_boundary = "session"
+
 [storage]
 # Where raw samples are stored. Point this at an iCloud Drive / Dropbox folder
 # for loose cross-device history (single-writer only — one machine's daemon).

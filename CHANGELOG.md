@@ -4,6 +4,32 @@ All notable changes to active-lens are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-17
+
+### Added
+
+- **`work.day_boundary`** chooses what a logical day boundary does to a session
+  running across it. `"session"` (default, unchanged) files the session whole
+  under the day it started in; `"strict"` ends it at the boundary, so each day is
+  credited exactly the work that fell inside it — the rule for a workplace whose
+  working day is defined for you. See
+  [ADR 0002](docs/en/adr/0002-configurable-day-boundary.md).
+- **`carried_in` / `carried_out`** on every session and day in
+  `timeline --json` and `now --json`: whether that end is a boundary cut rather
+  than a real start or finish. Set in `"session"` mode too, for the backstop cut
+  at the second boundary. The human `timeline` prints `continues from previous
+  day` / `continues into next day`, and its header now states which
+  `day_boundary` rule produced the log.
+- `timeline --json` publishes `day_boundary`; `status --json` publishes
+  `day_start_hour` and `day_boundary`; `doctor` prints the mode and what it means.
+
+### Changed
+
+- Nothing, unless you set `work.day_boundary = "strict"`. The default keeps
+  ADR 0001's attribution, so existing history reads exactly as before. Both modes
+  derive from the same raw samples: switching re-reads all recorded history,
+  with no migration.
+
 ## [0.2.1] - 2026-07-12
 
 ### Changed
@@ -79,6 +105,7 @@ Packaging-only release; no change to the binary's behaviour.
 - `config.toml` for sampling interval, active threshold, gap cap, and DB path
   (minimal hand-rolled parser, no external dependency).
 
-[Unreleased]: https://github.com/nlink-jp/active-lens/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nlink-jp/active-lens/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nlink-jp/active-lens/compare/v0.2.1...v0.3.0
 [0.2.0]: https://github.com/nlink-jp/active-lens/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nlink-jp/active-lens/releases/tag/v0.1.0

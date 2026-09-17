@@ -63,12 +63,16 @@ type jsonBlock struct {
 	PresentSeconds   int64  `json:"present_seconds"`
 }
 
-// jsonSession is one unbroken stretch of work, never split at a day boundary.
+// jsonSession is one unbroken stretch of work. Under day_boundary "session" it
+// is never split at a day boundary; under "strict" a boundary ends it, and the
+// carried flags say which of its ends is a cut rather than a real one.
 type jsonSession struct {
 	StartUnix        int64       `json:"start_unix"`
 	EndUnix          int64       `json:"end_unix"`
 	Start            string      `json:"start"`
 	End              string      `json:"end"`
+	CarriedIn        bool        `json:"carried_in"`  // start is a boundary cut
+	CarriedOut       bool        `json:"carried_out"` // end is a boundary cut
 	OperatingSeconds int64       `json:"operating_seconds"`
 	PresentSeconds   int64       `json:"present_seconds"`
 	ActiveSeconds    int64       `json:"active_seconds"`
@@ -84,6 +88,8 @@ type jsonDayTimeline struct {
 	WorkEndUnix      int64         `json:"work_end_unix"`   // may exceed day_start+86400
 	WorkStart        string        `json:"work_start"`      // "HH:MM" or ""
 	WorkEnd          string        `json:"work_end"`
+	CarriedIn        bool          `json:"carried_in"`  // work_start is this day's boundary
+	CarriedOut       bool          `json:"carried_out"` // work ran past the next boundary
 	OperatingSeconds int64         `json:"operating_seconds"`
 	PresentSeconds   int64         `json:"present_seconds"`
 	ActiveSeconds    int64         `json:"active_seconds"` // operating + present
@@ -103,6 +109,7 @@ type jsonTimeline struct {
 	BreakThresholdSeconds int64             `json:"break_threshold_seconds"`
 	SessionGapSeconds     int64             `json:"session_gap_seconds"`
 	DayStartHour          int               `json:"day_start_hour"`
+	DayBoundary           string            `json:"day_boundary"` // "session" | "strict"
 	Days                  []jsonDayTimeline `json:"days"`
 }
 
@@ -127,6 +134,7 @@ func buildTimeline(samples []activity.Sample, since, until time.Time, p aggregat
 		BreakThresholdSeconds: int64(p.BreakThreshold.Seconds()),
 		SessionGapSeconds:     int64(p.SessionGap.Seconds()),
 		DayStartHour:          p.DayStartHour,
+		DayBoundary:           string(p.Boundary()),
 		Days:                  make([]jsonDayTimeline, 0, len(dates)),
 	}
 	for _, date := range dates {
@@ -163,6 +171,8 @@ func toJSONDayTimeline(d aggregate.DayTimeline, loc *time.Location) jsonDayTimel
 		PresentSeconds:   int64(d.PresentSeconds),
 		ActiveSeconds:    int64(d.ActiveSeconds()),
 		SpanSeconds:      int64(d.SpanSeconds()),
+		CarriedIn:        d.CarriedIn,
+		CarriedOut:       d.CarriedOut,
 		Sessions:         []jsonSession{},
 		Segments:         []jsonSegment{},
 		Blocks:           []jsonBlock{},
@@ -178,6 +188,8 @@ func toJSONDayTimeline(d aggregate.DayTimeline, loc *time.Location) jsonDayTimel
 		jd.Sessions = append(jd.Sessions, jsonSession{
 			StartUnix: s.Start.Unix(), EndUnix: s.End.Unix(),
 			Start: hm(s.Start, loc), End: hm(s.End, loc),
+			CarriedIn:        s.CarriedIn,
+			CarriedOut:       s.CarriedOut,
 			OperatingSeconds: int64(s.OperatingSeconds),
 			PresentSeconds:   int64(s.PresentSeconds),
 			ActiveSeconds:    int64(s.ActiveSeconds()),
@@ -246,6 +258,13 @@ func printTimelineHuman(w io.Writer, tl jsonTimeline, loc *time.Location) {
 		tl.Timezone, tl.Since, tl.Until, tl.SampleCount)
 	fmt.Fprintf(w, "Day starts at %02d:00; a session ends after %s away.\n",
 		tl.DayStartHour, formatSeconds(tl.SessionGapSeconds))
+	if tl.DayBoundary == string(aggregate.BoundaryStrict) {
+		fmt.Fprintln(w, "day_boundary = strict: a session is cut at the boundary, so each day is")
+		fmt.Fprintln(w, "credited exactly the work that fell inside it.")
+	} else {
+		fmt.Fprintln(w, "day_boundary = session: a session stays on the day it started, so work")
+		fmt.Fprintln(w, "past the boundary is still credited to that day.")
+	}
 	for _, d := range tl.Days {
 		if !d.HasWork {
 			fmt.Fprintf(w, "\n%s   (no work recorded)\n", d.Date)
@@ -268,6 +287,14 @@ func printTimelineHuman(w io.Writer, tl jsonTimeline, loc *time.Location) {
 			}
 			fmt.Fprintf(w, "   · %d break(s) %s", len(d.Breaks), formatSeconds(total))
 		}
+		// A carried end is a cut, not a real start or finish. Say so on the line
+		// that shows it, or the boundary reads as a suspiciously punctual workday.
+		if d.CarriedIn {
+			fmt.Fprint(w, "   · continues from previous day")
+		}
+		if d.CarriedOut {
+			fmt.Fprint(w, "   · continues into next day")
+		}
 		fmt.Fprintln(w)
 		for _, b := range d.Breaks {
 			fmt.Fprintf(w, "    break %s–%s (%s)\n", b.Start, b.End, formatSeconds(b.Seconds))
@@ -285,6 +312,8 @@ type jsonNowSession struct {
 	EndUnix          int64       `json:"end_unix"`
 	Start            string      `json:"start"`
 	End              string      `json:"end"`
+	CarriedIn        bool        `json:"carried_in"`  // start is a day-boundary cut
+	CarriedOut       bool        `json:"carried_out"` // end is a day-boundary cut
 	ActiveSeconds    int64       `json:"active_seconds"`
 	OperatingSeconds int64       `json:"operating_seconds"`
 	PresentSeconds   int64       `json:"present_seconds"`
@@ -340,6 +369,8 @@ func buildNow(samples []activity.Sample, now time.Time, staleAfter time.Duration
 		EndUnix:          cur.End.Unix(),
 		Start:            hm(cur.Start, loc),
 		End:              hm(cur.End, loc),
+		CarriedIn:        cur.CarriedIn,
+		CarriedOut:       cur.CarriedOut,
 		ActiveSeconds:    int64(cur.ActiveSeconds()),
 		OperatingSeconds: int64(cur.OperatingSeconds),
 		PresentSeconds:   int64(cur.PresentSeconds),
@@ -378,7 +409,16 @@ func printNowHuman(w io.Writer, n jsonNow) {
 	case s.Open:
 		state = "open"
 	}
-	fmt.Fprintf(w, "Session  %s → %s   (%s)\n", s.Start, s.End, state)
+	carried := ""
+	switch {
+	case s.CarriedIn && s.CarriedOut:
+		carried = "   · carried across the day boundary"
+	case s.CarriedIn:
+		carried = "   · started at the day boundary, work was already in progress"
+	case s.CarriedOut:
+		carried = "   · cut at the day boundary"
+	}
+	fmt.Fprintf(w, "Session  %s → %s   (%s)%s\n", s.Start, s.End, state, carried)
 	fmt.Fprintf(w, "  active     %s   (operating %s, present %s)\n",
 		formatSeconds(s.ActiveSeconds), formatSeconds(s.OperatingSeconds), formatSeconds(s.PresentSeconds))
 	if len(s.Breaks) > 0 {
@@ -412,6 +452,8 @@ type statusJSON struct {
 	IntervalSeconds  int     `json:"interval_seconds"`
 	ThresholdSeconds float64 `json:"threshold_seconds"`
 	MaxGapSeconds    int     `json:"max_gap_seconds"`
+	DayStartHour     int     `json:"day_start_hour"`
+	DayBoundary      string  `json:"day_boundary"` // "session" | "strict"
 	LastSampleUnix   int64   `json:"last_sample_unix"`  // 0 when no samples yet
 	LastSampleState  string  `json:"last_sample_state"` // "" when no samples yet
 }

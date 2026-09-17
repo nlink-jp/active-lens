@@ -343,3 +343,176 @@ func TestLogicalDate(t *testing.T) {
 		}
 	}
 }
+
+// --- ADR 0002: day_boundary = "strict" -------------------------------------
+
+// pStrict is the default derivation with the boundary cutting every session —
+// the workplace rule, where the day belongs to the employer, not the night.
+func pStrict(maxGap time.Duration) Params {
+	params := p(maxGap)
+	params.DayBoundary = BoundaryStrict
+	return params
+}
+
+func TestSessions_StrictCutsAtEveryBoundary(t *testing.T) {
+	// The same 20:00 → 09:00 all-nighter that BoundarySession keeps whole.
+	samples := genSamples("2026-07-09 20:00:00", "2026-07-10 09:00:00", 300, activity.Operating)
+
+	whole := Sessions(samples, p(10*time.Minute), utc)
+	if len(whole) != 1 {
+		t.Fatalf("session mode: got %d sessions, want 1 (the ADR 0001 behaviour)", len(whole))
+	}
+
+	sessions := Sessions(samples, pStrict(10*time.Minute), utc)
+	if len(sessions) != 2 {
+		t.Fatalf("strict: got %d sessions, want 2 (cut at 04:00): %+v", len(sessions), sessions)
+	}
+	cut := time.Date(2026, 7, 10, 4, 0, 0, 0, utc)
+	if !sessions[0].End.Equal(cut) || !sessions[1].Start.Equal(cut) {
+		t.Errorf("cut = %v/%v, want both at the boundary %v", sessions[0].End, sessions[1].Start, cut)
+	}
+	if !sessions[0].CarriedOut || sessions[0].CarriedIn {
+		t.Errorf("head carried flags = in:%v out:%v, want in:false out:true", sessions[0].CarriedIn, sessions[0].CarriedOut)
+	}
+	if !sessions[1].CarriedIn || sessions[1].CarriedOut {
+		t.Errorf("tail carried flags = in:%v out:%v, want in:true out:false", sessions[1].CarriedIn, sessions[1].CarriedOut)
+	}
+	// Cutting must move seconds between days, never create or destroy them.
+	if got, want := sessions[0].ActiveSeconds()+sessions[1].ActiveSeconds(), whole[0].ActiveSeconds(); got != want {
+		t.Errorf("active seconds after the cut = %d, want %d (the uncut session)", got, want)
+	}
+}
+
+func TestTimeline_StrictFilesEachPieceUnderItsOwnDay(t *testing.T) {
+	// The workplace case: a day that starts at 05:00, worked straight through it.
+	params := pStrict(10 * time.Minute)
+	params.DayStartHour = 5
+	samples := genSamples("2026-07-09 22:00:00", "2026-07-10 10:00:00", 300, activity.Operating)
+
+	days := Timeline(samples, params, utc)
+	if len(days) != 2 {
+		t.Fatalf("got %d days, want 2 (the boundary splits the night): %+v", len(days), days)
+	}
+	if days[0].Date != "2026-07-09" || days[1].Date != "2026-07-10" {
+		t.Fatalf("dates = %s, %s; want 2026-07-09 and 2026-07-10", days[0].Date, days[1].Date)
+	}
+	if hhmm(days[0].WorkEnd) != "05:00" || !days[0].CarriedOut {
+		t.Errorf("day0 ends %s (carried_out=%v), want 05:00 carried out",
+			hhmm(days[0].WorkEnd), days[0].CarriedOut)
+	}
+	if hhmm(days[1].WorkStart) != "05:00" || !days[1].CarriedIn {
+		t.Errorf("day1 starts %s (carried_in=%v), want 05:00 carried in",
+			hhmm(days[1].WorkStart), days[1].CarriedIn)
+	}
+	// 22:00→05:00 is 7h, 05:00→10:00 is 5h.
+	if got := days[0].ActiveSeconds(); got != 7*3600 {
+		t.Errorf("day0 active = %ds, want 7h", got)
+	}
+	if got := days[1].ActiveSeconds(); got != 5*3600 {
+		t.Errorf("day1 active = %ds, want 5h", got)
+	}
+}
+
+func TestSessions_StrictAwayAcrossBoundaryCarriesNeither(t *testing.T) {
+	// Away when the day turns over: each day begins and ends on real activity, so
+	// there is no cut to label. 03:30 → 04:25 away is over the break threshold but
+	// well under the session gap, and it straddles 04:00.
+	var samples []activity.Sample
+	samples = append(samples, genSamples("2026-07-09 23:00:00", "2026-07-10 03:25:00", 300, activity.Operating)...)
+	samples = append(samples, genSamples("2026-07-10 03:30:00", "2026-07-10 04:20:00", 300, activity.Away)...)
+	samples = append(samples, genSamples("2026-07-10 04:25:00", "2026-07-10 06:00:00", 300, activity.Operating)...)
+
+	sessions := Sessions(samples, pStrict(10*time.Minute), utc)
+	if len(sessions) != 2 {
+		t.Fatalf("got %d sessions, want 2: %+v", len(sessions), sessions)
+	}
+	if hhmm(sessions[0].End) != "03:30" || sessions[0].CarriedOut {
+		t.Errorf("session0 ends %s (carried_out=%v), want 03:30 and no carry",
+			hhmm(sessions[0].End), sessions[0].CarriedOut)
+	}
+	if hhmm(sessions[1].Start) != "04:25" || sessions[1].CarriedIn {
+		t.Errorf("session1 starts %s (carried_in=%v), want 04:25 and no carry",
+			hhmm(sessions[1].Start), sessions[1].CarriedIn)
+	}
+	// The straddling away belongs to neither day's work log.
+	for _, s := range sessions {
+		for _, b := range s.Breaks {
+			t.Errorf("break %s–%s: an away that ends a day is not a break", hhmm(b.Start), hhmm(b.End))
+		}
+	}
+}
+
+func TestSessions_StrictNeverOutlivesItsLogicalDay(t *testing.T) {
+	// The display that never sleeps: under BoundarySession the backstop caps this
+	// at the second boundary; under strict every boundary cuts, so the three-day
+	// run becomes one session per logical day, each below 24h.
+	samples := []activity.Sample{
+		samp("2026-07-09 10:00:00", activity.Present),
+		samp("2026-07-12 10:00:00", activity.Present),
+	}
+	sessions := Sessions(samples, pStrict(100*time.Hour), utc)
+	if len(sessions) != 4 {
+		t.Fatalf("got %d sessions, want 4 (07-09, 07-10, 07-11, 07-12): %+v", len(sessions), sessions)
+	}
+	for i, s := range sessions {
+		// A session filling a whole logical day is exactly 24h; more than that
+		// would mean it outlived the day it is filed under.
+		if s.Duration() > 24*time.Hour {
+			t.Errorf("session %d lasts %v; strict sessions cannot outlive their day", i, s.Duration())
+		}
+	}
+	days := Timeline(samples, pStrict(100*time.Hour), utc)
+	if len(days) != 4 {
+		t.Errorf("got %d days, want 4 — no day is swallowed by its predecessor: %+v", len(days), days)
+	}
+}
+
+func TestTimeline_StrictDayTotalsMatchReportDayTotals(t *testing.T) {
+	// ADR 0001 §5's accepted divergence, inverted: under strict the work-log
+	// ledger and the totals ledger must agree day for day.
+	params := pStrict(10 * time.Minute)
+	var samples []activity.Sample
+	samples = append(samples, genSamples("2026-07-09 20:00:00", "2026-07-10 09:00:00", 300, activity.Operating)...)
+	samples = append(samples, genSamples("2026-07-10 09:05:00", "2026-07-10 15:00:00", 300, activity.Away)...)
+	samples = append(samples, genSamples("2026-07-10 15:05:00", "2026-07-10 18:00:00", 300, activity.Present)...)
+
+	byDate := map[string]int{}
+	for _, d := range Timeline(samples, params, utc) {
+		byDate[d.Date] = d.ActiveSeconds()
+	}
+	for _, d := range ByDay(samples, params.MaxGap, utc, params.DayStartHour) {
+		want := int((d.Totals.Operating + d.Totals.Present).Seconds())
+		if got := byDate[d.Date]; got != want {
+			t.Errorf("%s: timeline active %ds, report active %ds", d.Date, got, want)
+		}
+		delete(byDate, d.Date)
+	}
+	for date, secs := range byDate {
+		t.Errorf("%s: timeline reports %ds the report path never saw", date, secs)
+	}
+}
+
+func TestSessions_BackstopCutIsLabelledInSessionMode(t *testing.T) {
+	// The default mode has exactly one artificial boundary. It gets the same
+	// labels, so a consumer never has to guess whether 04:00 was a real start.
+	samples := []activity.Sample{
+		samp("2026-07-09 10:00:00", activity.Present),
+		samp("2026-07-12 10:00:00", activity.Present),
+	}
+	sessions := Sessions(samples, p(100*time.Hour), utc)
+	if len(sessions) != 2 {
+		t.Fatalf("got %d sessions, want 2", len(sessions))
+	}
+	if !sessions[0].CarriedOut || !sessions[1].CarriedIn {
+		t.Errorf("backstop cut unlabelled: out=%v in=%v", sessions[0].CarriedOut, sessions[1].CarriedIn)
+	}
+}
+
+func TestParams_BoundaryDefaultsToSession(t *testing.T) {
+	if got := (Params{}).Boundary(); got != BoundarySession {
+		t.Errorf("zero Params boundary = %q, want %q", got, BoundarySession)
+	}
+	if got := pStrict(time.Minute).Boundary(); got != BoundaryStrict {
+		t.Errorf("strict params boundary = %q, want %q", got, BoundaryStrict)
+	}
+}

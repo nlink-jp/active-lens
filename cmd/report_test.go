@@ -24,9 +24,9 @@ func testParams(maxGap time.Duration) aggregate.Params {
 func TestFormatSeconds(t *testing.T) {
 	cases := map[int64]string{
 		0:    "0s",
-		20:   "20s",    // sub-minute values show seconds, not "0m"
+		20:   "20s", // sub-minute values show seconds, not "0m"
 		59:   "59s",
-		90:   "2m",     // 1m30s rounds to 2m
+		90:   "2m", // 1m30s rounds to 2m
 		600:  "10m",
 		3599: "1h 00m", // rounds up cleanly to an hour, not "60m"
 		3600: "1h 00m",
@@ -157,7 +157,7 @@ func TestBuildTimeline_DenseDays(t *testing.T) {
 	if want := since.Unix(); d.DayStartUnix != want {
 		t.Errorf("day_start_unix = %d, want %d (07-01 04:00)", d.DayStartUnix, want)
 	}
-	if tl.DayStartHour != 4 || tl.SessionGapSeconds != int64((4 * time.Hour).Seconds()) {
+	if tl.DayStartHour != 4 || tl.SessionGapSeconds != int64((4*time.Hour).Seconds()) {
 		t.Errorf("payload must publish the derivation knobs: %+v", tl)
 	}
 }
@@ -340,5 +340,94 @@ func TestBuildNow_AllNighterFilesUnderTheNightItBegan(t *testing.T) {
 	}
 	if n.Day.ActiveSeconds != n.Session.ActiveSeconds {
 		t.Errorf("day active %d should equal the only session's %d", n.Day.ActiveSeconds, n.Session.ActiveSeconds)
+	}
+}
+
+// --- ADR 0002: day_boundary = "strict" -------------------------------------
+
+// testParamsStrict is the shipped default with the workplace boundary: a day
+// that starts at 05:00 and ends the session running across it.
+func testParamsStrict(maxGap time.Duration) aggregate.Params {
+	p := testParams(maxGap)
+	p.DayStartHour = 5
+	p.DayBoundary = aggregate.BoundaryStrict
+	return p
+}
+
+func TestBuildTimeline_StrictPublishesCarriedFlags(t *testing.T) {
+	loc := time.UTC
+	since := time.Date(2026, 7, 9, 5, 0, 0, 0, loc)
+	until := time.Date(2026, 7, 11, 5, 0, 0, 0, loc)
+	samples := workSamples(
+		time.Date(2026, 7, 9, 22, 0, 0, 0, loc),
+		time.Date(2026, 7, 10, 10, 0, 0, 0, loc), activity.Operating)
+
+	tl := buildTimeline(samples, since, until, testParamsStrict(2*time.Minute), loc)
+	if tl.DayBoundary != "strict" || tl.DayStartHour != 5 {
+		t.Fatalf("payload must publish the rule it used: %+v", tl)
+	}
+	if len(tl.Days) != 2 {
+		t.Fatalf("got %d days, want 2", len(tl.Days))
+	}
+	d0, d1 := tl.Days[0], tl.Days[1]
+	if !d0.CarriedOut || d0.WorkEnd != "05:00" {
+		t.Errorf("day0 = %s → %s carried_out=%v, want an 05:00 cut", d0.WorkStart, d0.WorkEnd, d0.CarriedOut)
+	}
+	if !d1.CarriedIn || d1.WorkStart != "05:00" {
+		t.Errorf("day1 = %s → %s carried_in=%v, want an 05:00 carry", d1.WorkStart, d1.WorkEnd, d1.CarriedIn)
+	}
+	if len(d1.Sessions) != 1 || !d1.Sessions[0].CarriedIn {
+		t.Errorf("the day's session must carry the flag too: %+v", d1.Sessions)
+	}
+	if d0.ActiveSeconds+d1.ActiveSeconds != 12*3600 {
+		t.Errorf("active total = %d, want 12h split across the two days",
+			d0.ActiveSeconds+d1.ActiveSeconds)
+	}
+}
+
+func TestPrintTimelineHuman_SaysWhichRuleAndWhereItCut(t *testing.T) {
+	loc := time.UTC
+	since := time.Date(2026, 7, 9, 5, 0, 0, 0, loc)
+	until := time.Date(2026, 7, 11, 5, 0, 0, 0, loc)
+	samples := workSamples(
+		time.Date(2026, 7, 9, 22, 0, 0, 0, loc),
+		time.Date(2026, 7, 10, 10, 0, 0, 0, loc), activity.Operating)
+
+	var buf bytes.Buffer
+	printTimelineHuman(&buf, buildTimeline(samples, since, until, testParamsStrict(2*time.Minute), loc), loc)
+	out := buf.String()
+	for _, must := range []string{
+		"Day starts at 05:00",
+		"day_boundary = strict",
+		"continues into next day",
+		"continues from previous day",
+	} {
+		if !strings.Contains(out, must) {
+			t.Errorf("output missing %q:\n%s", must, out)
+		}
+	}
+}
+
+func TestBuildNow_StrictRestartsAtTheBoundary(t *testing.T) {
+	// 05:30, having worked since 22:00. The heading answers "how much have I put
+	// in today", so it counts from the boundary, and says why it is small.
+	loc := time.UTC
+	start := time.Date(2026, 7, 9, 22, 0, 0, 0, loc)
+	last := time.Date(2026, 7, 10, 5, 30, 0, 0, loc)
+	now := last.Add(30 * time.Second)
+
+	n := buildNow(workSamples(start, last, activity.Operating), now, time.Minute,
+		testParamsStrict(2*time.Minute), loc)
+	if n.Session == nil || n.Session.Start != "05:00" {
+		t.Fatalf("session = %+v, want one starting at the 05:00 boundary", n.Session)
+	}
+	if !n.Session.CarriedIn {
+		t.Error("carried_in must be set, or a 30m heading after a night's work looks like lost data")
+	}
+	if n.Session.ActiveSeconds != 1800 {
+		t.Errorf("active = %ds, want 30m (the part that counts against today)", n.Session.ActiveSeconds)
+	}
+	if n.Day.Date != "2026-07-10" {
+		t.Errorf("day = %s, want the logical day now falls in", n.Day.Date)
 	}
 }

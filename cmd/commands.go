@@ -44,7 +44,18 @@ func paramsOf(cfg config.Config) aggregate.Params {
 		BreakThreshold: time.Duration(cfg.BreakMinutes) * time.Minute,
 		SessionGap:     time.Duration(cfg.SessionGapMinutes) * time.Minute,
 		DayStartHour:   cfg.DayStartHour,
+		DayBoundary:    aggregate.DayBoundary(cfg.DayBoundary),
 	}
+}
+
+// dayBoundaryGloss explains a day_boundary value in one clause, so `doctor`
+// answers "which day does work past the boundary count against" without the
+// reader going to the config docs.
+func dayBoundaryGloss(mode string) string {
+	if mode == config.DayBoundaryStrict {
+		return "work past the boundary counts against the new day"
+	}
+	return "a session stays on the day it started"
 }
 
 // staleAfter is how long a sample drought means recording has stopped.
@@ -377,6 +388,8 @@ func emitStatusJSON(w io.Writer, cfg config.Config, info platform.DaemonInfo, _ 
 		IntervalSeconds:  cfg.IntervalSeconds,
 		ThresholdSeconds: cfg.ActiveThresholdSeconds,
 		MaxGapSeconds:    cfg.MaxGapSeconds,
+		DayStartHour:     cfg.DayStartHour,
+		DayBoundary:      cfg.DayBoundary,
 	}
 	if info.ConfigPath != "" {
 		if _, e := os.Stat(info.ConfigPath); e == nil {
@@ -416,9 +429,10 @@ func runDoctor(args []string) error {
 	fmt.Printf("DB path:     %s\n", cfg.DBPath)
 	fmt.Printf("Interval:    %ds\nThreshold:   %.0fs\nMaxGap:      %ds\n",
 		cfg.IntervalSeconds, cfg.ActiveThresholdSeconds, cfg.MaxGapSeconds)
-	// These three decide how the work log reads, so surface what resolved.
+	// These four decide how the work log reads, so surface what resolved.
 	fmt.Printf("Break:       %dm\nSessionGap:  %dm\nDayStart:    %02d:00\n",
 		cfg.BreakMinutes, cfg.SessionGapMinutes, cfg.DayStartHour)
+	fmt.Printf("DayBoundary: %s (%s)\n", cfg.DayBoundary, dayBoundaryGloss(cfg.DayBoundary))
 
 	fmt.Print("Signals:     ")
 	snap, serr := signal.NewSampler().Snapshot()

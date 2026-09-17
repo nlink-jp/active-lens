@@ -30,6 +30,42 @@ type Params struct {
 	SessionGap time.Duration
 	// DayStartHour (0..23) is the local hour a logical day begins at.
 	DayStartHour int
+	// DayBoundary selects what a day boundary does to a session in progress.
+	// The zero value is BoundarySession, the behaviour of ADR 0001.
+	DayBoundary DayBoundary
+}
+
+// DayBoundary is what a logical day boundary does to a session running across
+// it. See docs/{en,ja}/adr/0002.
+type DayBoundary string
+
+const (
+	// BoundarySession files a session, whole, under the logical day it started
+	// in; only the backstop at the second boundary ever cuts one. Zero value.
+	BoundarySession DayBoundary = "session"
+	// BoundaryStrict ends a session at every logical day boundary, so each day is
+	// credited exactly the work that fell inside it — the rule for a working day
+	// defined by someone other than the user.
+	BoundaryStrict DayBoundary = "strict"
+)
+
+// Boundary is the mode in effect, resolving the zero value to BoundarySession.
+func (p Params) Boundary() DayBoundary {
+	if p.DayBoundary == BoundaryStrict {
+		return BoundaryStrict
+	}
+	return BoundarySession
+}
+
+// cutAfter returns the instant a session started at t must be closed at: the
+// next boundary under BoundaryStrict, the one after that under BoundarySession,
+// where it is a backstop against a session that never terminates itself rather
+// than a routine cut.
+func (p Params) cutAfter(t time.Time) time.Time {
+	if p.Boundary() == BoundaryStrict {
+		return boundaryAfter(t, p.DayStartHour)
+	}
+	return secondBoundaryAfter(t, p.DayStartHour)
 }
 
 // Segments collapses the sample stream into contiguous same-state spans (times
@@ -92,14 +128,21 @@ func isActive(s activity.State) bool { return s == activity.Operating || s == ac
 // Session is one unbroken stretch of work: a maximal run of segments containing
 // at least one active segment, delimited by away spans of at least SessionGap.
 // It begins and ends on activity — leading and trailing away is trimmed — so
-// Start and End are real moments the user was at the machine. A session is never
-// split at a calendar boundary, which is what keeps an evening that runs past
-// midnight in one piece.
+// Start and End are real moments the user was at the machine — except where a
+// day-boundary cut made one of them, which CarriedIn / CarriedOut record. Under
+// BoundarySession a session is never split at a calendar boundary, which is what
+// keeps an evening that runs past midnight in one piece.
 type Session struct {
 	Start    time.Time
 	End      time.Time
 	Segments []Segment // spans from Start to End, including the internal breaks
 	Breaks   []WorkBreak
+
+	// CarriedIn means Start is a day-boundary cut rather than a real start: work
+	// was already in progress when the logical day turned over. CarriedOut means
+	// End is such a cut — work continued past the boundary.
+	CarriedIn  bool
+	CarriedOut bool
 
 	OperatingSeconds int
 	PresentSeconds   int
@@ -115,27 +158,42 @@ func (s Session) Duration() time.Duration { return s.End.Sub(s.Start) }
 // bucketing. Two rules end a session:
 //
 //   - an away span of at least p.SessionGap (the away belongs to no session), and
-//   - the second logical day boundary after the session began.
+//   - the day boundary p.cutAfter reports for the session's start.
 //
-// The second is a backstop, not a routine cut. activity.Classify reports
-// "present" for as long as the display is on and the machine unlocked, however
-// long the user has been idle, so a Mac held awake emits an activity run that
-// never terminates on its own. Bounding a session at its second boundary keeps
-// such a run below 48h instead of unbounded, while leaving a real all-nighter
-// (which crosses exactly one boundary) whole.
+// Under BoundarySession that second rule is a backstop, not a routine cut.
+// activity.Classify reports "present" for as long as the display is on and the
+// machine unlocked, however long the user has been idle, so a Mac held awake
+// emits an activity run that never terminates on its own. Bounding a session at
+// its second boundary keeps such a run below 48h instead of unbounded, while
+// leaving a real all-nighter (which crosses exactly one boundary) whole. Under
+// BoundaryStrict it is the routine cut: every boundary ends the session, and no
+// session outlives its logical day.
+//
+// A session that a boundary cut ended, and the one that opens at that instant,
+// are marked CarriedOut / CarriedIn so a consumer can tell a cut from a real
+// start or end.
 func Sessions(samples []activity.Sample, p Params, loc *time.Location) []Session {
 	segs := Segments(samples, p.MaxGap, loc)
 
 	var out []Session
 	var buf []Segment
-	// limit is the second logical boundary after this session's start; the zero
-	// value means the session has not begun (no active segment seen yet).
+	// limit is the boundary this session must be closed at; the zero value means
+	// the session has not begun (no active segment seen yet).
 	var limit time.Time
+	// carryFrom is the boundary the previous session was cut at, or zero when it
+	// ended on its own. A session claims CarriedIn only if it starts on that very
+	// instant: work interrupted at the boundary and resumed later began for real.
+	var carryFrom time.Time
 
-	flush := func() {
+	// flush closes the buffered session. cutAt is the boundary that ended it, or
+	// the zero time when an absence or the end of the stream did.
+	flush := func(cutAt time.Time) {
 		if s, ok := newSession(buf, p.BreakThreshold); ok {
+			s.CarriedIn = !carryFrom.IsZero() && s.Start.Equal(carryFrom)
+			s.CarriedOut = !cutAt.IsZero() && s.End.Equal(cutAt)
 			out = append(out, s)
 		}
+		carryFrom = cutAt
 		buf, limit = nil, time.Time{}
 	}
 
@@ -150,26 +208,26 @@ func Sessions(samples []activity.Sample, p Params, loc *time.Location) []Session
 
 		// A long absence ends the session and belongs to none.
 		if seg.State == activity.Away && p.SessionGap > 0 && seg.Duration() >= p.SessionGap {
-			flush()
+			flush(time.Time{})
 			continue
 		}
 
 		if limit.IsZero() && isActive(seg.State) {
-			limit = secondBoundaryAfter(seg.Start, p.DayStartHour)
+			limit = p.cutAfter(seg.Start)
 		}
 
-		// A merged segment can be arbitrarily long, so the backstop cut is applied
-		// within a segment, not only between segments.
+		// A merged segment can be arbitrarily long, so the cut is applied within a
+		// segment, not only between segments.
 		if !limit.IsZero() && seg.Start.Before(limit) && seg.End.After(limit) {
 			tail := Segment{Start: limit, End: seg.End, State: seg.State}
 			buf = append(buf, Segment{Start: seg.Start, End: limit, State: seg.State})
-			flush()
+			flush(limit)
 			pending = &tail
 			continue
 		}
 		buf = append(buf, seg)
 	}
-	flush()
+	flush(time.Time{})
 	return out
 }
 
@@ -310,6 +368,12 @@ type DayTimeline struct {
 	WorkEnd   time.Time // last session's end — may fall past DayStart+24h
 	Breaks    []WorkBreak
 
+	// CarriedIn means WorkStart is this day's boundary rather than a real start —
+	// work was already in progress when the day turned over. CarriedOut means the
+	// day's last session was cut at the next boundary and work continued past it.
+	CarriedIn  bool
+	CarriedOut bool
+
 	OperatingSeconds int
 	PresentSeconds   int
 }
@@ -326,8 +390,11 @@ func (d DayTimeline) SpanSeconds() int {
 	return int(d.WorkEnd.Sub(d.WorkStart).Seconds())
 }
 
-// Timeline derives sessions and files each one, whole, under the logical day it
-// started in. Days with any activity are returned, sorted ascending by date.
+// Timeline derives sessions and files each one under the logical day it started
+// in. Under BoundarySession a session is filed whole, so a day's work may end
+// after the day does; under BoundaryStrict no session crosses a boundary in the
+// first place, and the day totals match those of the report path. Days with any
+// activity are returned, sorted ascending by date.
 func Timeline(samples []activity.Sample, p Params, loc *time.Location) []DayTimeline {
 	byDay := map[string][]Session{}
 	for _, s := range Sessions(samples, p, loc) {
@@ -349,12 +416,14 @@ func Timeline(samples []activity.Sample, p Params, loc *time.Location) []DayTime
 // and calling that a break would be the very error this derivation removes.
 func deriveDay(date string, sessions []Session, p Params) DayTimeline {
 	d := DayTimeline{
-		Date:      date,
-		DayStart:  LogicalDayStart(sessions[0].Start, p.DayStartHour),
-		Sessions:  sessions,
-		HasWork:   true,
-		WorkStart: sessions[0].Start,
-		WorkEnd:   sessions[len(sessions)-1].End,
+		Date:       date,
+		DayStart:   LogicalDayStart(sessions[0].Start, p.DayStartHour),
+		Sessions:   sessions,
+		HasWork:    true,
+		WorkStart:  sessions[0].Start,
+		WorkEnd:    sessions[len(sessions)-1].End,
+		CarriedIn:  sessions[0].CarriedIn,
+		CarriedOut: sessions[len(sessions)-1].CarriedOut,
 	}
 	for _, s := range sessions {
 		d.Segments = append(d.Segments, s.Segments...)

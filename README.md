@@ -76,6 +76,31 @@ evening, and the following morning starts when you actually sit down, not at
 00:00. Sleeping between two sessions is not a break, and neither is a five-hour
 gap between a morning and an evening session.
 
+### When the day boundary is not yours (`work.day_boundary`)
+
+The rule above is right for a personal log: work that runs from 22:00 to 09:00
+is one night's work, filed under the night it began. It is wrong where the
+working day is defined by someone else — an employer whose day starts at 05:00 —
+because the hours after 05:00 are then merged into a day that had already ended.
+
+`work.day_boundary` chooses between the two readings:
+
+| Value | A session that runs through the boundary |
+|-------|------------------------------------------|
+| `session` (default) | Stays whole, filed under the day it started in |
+| `strict` | Is cut at the boundary; each day is credited exactly the work that fell inside it |
+
+Under `strict` the work log and the totals ledger agree day for day, the menu
+bar's figure restarts at the boundary, and a day whose work was already under
+way when the boundary passed is marked `continues from previous day` (`carried_in`
+in the JSON). That mark matters: such a day's `work_start` is the boundary
+itself, not a time anyone sat down at.
+
+Both modes read the same recorded samples — thresholds and boundaries are
+applied when the log is derived, so switching the setting re-reads all of your
+history and nothing is migrated or lost. See
+[ADR 0002](docs/en/adr/0002-configurable-day-boundary.md).
+
 ### now (the current session)
 
 ```sh
@@ -120,11 +145,14 @@ active-lens timeline --json                            # for the GUI
 2026-07-10   07:26 → 10:42   active 2h 40m
 ```
 
-`(+1d)` marks a session that ended after midnight. The `--json` output includes
-each day's colored spans (for a timeline view), its `sessions` and `blocks`, and
-the derived `work_start` / `work_end` / `breaks`. Prefer `--days N` over
-computing a `--since` date yourself: it resolves the range against the logical
-day, boundary included.
+`(+1d)` marks a session that ended after midnight, and the header states which
+`day_boundary` rule produced the log. Under `strict`, a day whose work crossed
+the boundary is marked `continues into next day` / `continues from previous day`
+so a cut is never mistaken for a punctual start or finish. The `--json` output
+includes each day's colored spans (for a timeline view), its `sessions` and
+`blocks`, the derived `work_start` / `work_end` / `breaks`, and the
+`carried_in` / `carried_out` flags. Prefer `--days N` over computing a `--since`
+date yourself: it resolves the range against the logical day, boundary included.
 
 ### report / today
 
@@ -142,7 +170,9 @@ Note that `report` attributes each *second* to the logical day it falls in, whil
 `timeline` attributes a whole *session* to the day it started in. The two agree
 except when a session runs through `day_start_hour` — an all-nighter counts
 entirely on its starting day in `timeline`, and splits across two in `report`.
-That is the difference between a work log and a totals ledger.
+That is the difference between a work log and a totals ledger. Setting
+`work.day_boundary = "strict"` removes the difference by cutting the session at
+the boundary too.
 
 Example:
 
@@ -176,6 +206,7 @@ Optional `config.toml` in `~/Library/Application Support/active-lens/`
 | `work.break_minutes` | `10` | Min away span counted as a break inside a session |
 | `work.session_gap_minutes` | `240` | Away span that ends a session; must exceed `break_minutes` |
 | `work.day_start_hour` | `4` | Local hour a logical day begins; `0` for calendar days |
+| `work.day_boundary` | `"session"` | `"session"`: a session stays on the day it started. `"strict"`: the boundary cuts it, so each day gets only its own hours |
 | `storage.db_path` | data dir | Where samples live; point at iCloud/Dropbox for loose sync |
 
 Run `active-lens doctor` to see what resolved.

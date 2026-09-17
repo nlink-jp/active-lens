@@ -33,9 +33,25 @@ type Config struct {
 	// before it is filed under the previous day, so an evening that runs past
 	// midnight stays on the day it started.
 	DayStartHour int
+	// DayBoundary selects what a logical day boundary does to a session in
+	// progress: DayBoundarySession files the session whole under the day it
+	// started in, DayBoundaryStrict ends it at the boundary and opens a new one
+	// there. See docs/{en,ja}/adr/0002.
+	DayBoundary string
 	// DBPath is where raw samples are stored.
 	DBPath string
 }
+
+// Day boundary modes. These are the accepted spellings of work.day_boundary.
+const (
+	// DayBoundarySession files a session, whole, under the logical day it started
+	// in — an evening that runs past the boundary stays one piece of work.
+	DayBoundarySession = "session"
+	// DayBoundaryStrict ends a session at every logical day boundary, so each
+	// day is credited exactly the work that falls inside it. This is the mode for
+	// a workplace whose working day is defined by someone other than the user.
+	DayBoundaryStrict = "strict"
+)
 
 // Defaults returns the built-in defaults. dataDir seeds DBPath; MaxGap derives
 // from the interval.
@@ -48,6 +64,7 @@ func Defaults(dataDir string) Config {
 		BreakMinutes:           10,
 		SessionGapMinutes:      240,
 		DayStartHour:           4,
+		DayBoundary:            DayBoundarySession,
 		DBPath:                 filepath.Join(dataDir, "activity.db"),
 	}
 }
@@ -118,6 +135,15 @@ func apply(cfg Config, data []byte) (Config, error) {
 			return cfg, fmt.Errorf("work.day_start_hour: want integer 0..23, got %q", v)
 		}
 		cfg.DayStartHour = n
+	}
+	if v, ok := kv["work.day_boundary"]; ok {
+		// A typo that silently kept the old attribution is exactly the failure this
+		// option exists to prevent, so an unknown spelling is an error.
+		if v != DayBoundarySession && v != DayBoundaryStrict {
+			return cfg, fmt.Errorf("work.day_boundary: want %q or %q, got %q",
+				DayBoundarySession, DayBoundaryStrict, v)
+		}
+		cfg.DayBoundary = v
 	}
 	if v, ok := kv["storage.db_path"]; ok && v != "" {
 		cfg.DBPath = expandHome(v)

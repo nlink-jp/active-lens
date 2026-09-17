@@ -107,3 +107,30 @@ func TestParse_Malformed(t *testing.T) {
 		t.Error("line without = should error")
 	}
 }
+
+func TestApply_DayBoundary(t *testing.T) {
+	if got := Defaults("/data").DayBoundary; got != DayBoundarySession {
+		t.Errorf("default day_boundary = %q, want %q", got, DayBoundarySession)
+	}
+	for _, want := range []string{DayBoundarySession, DayBoundaryStrict} {
+		toml := "[work]\nday_boundary = \"" + want + "\"\n"
+		c, err := apply(Defaults("/data"), []byte(toml))
+		if err != nil {
+			t.Fatalf("apply %q: %v", want, err)
+		}
+		if c.DayBoundary != want {
+			t.Errorf("day_boundary = %q, want %q", c.DayBoundary, want)
+		}
+	}
+}
+
+func TestApply_DayBoundaryRejectsUnknownSpelling(t *testing.T) {
+	// Silently keeping the old attribution is the failure the option exists to
+	// prevent, so a typo must be loud.
+	for _, bad := range []string{"Strict", "calendar", "true", ""} {
+		toml := "[work]\nday_boundary = \"" + bad + "\"\n"
+		if _, err := apply(Defaults("/data"), []byte(toml)); err == nil {
+			t.Errorf("day_boundary = %q accepted, want an error", bad)
+		}
+	}
+}
