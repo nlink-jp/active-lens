@@ -216,9 +216,21 @@ func Sessions(samples []activity.Sample, p Params, loc *time.Location) []Session
 			limit = p.cutAfter(seg.Start)
 		}
 
+		// The boundary can fall between two segments as easily as inside one — a
+		// state change or a max_gap split landing exactly on the hour. Close the
+		// session here and re-read this segment with the limit cleared, so it
+		// opens the next session and computes its own limit. Missing this case
+		// left `limit` set to a boundary already passed, which is never met
+		// again: the session then ran on until the next long absence.
+		if !limit.IsZero() && !seg.Start.Before(limit) {
+			flush(limit)
+			pending = &seg
+			continue
+		}
+
 		// A merged segment can be arbitrarily long, so the cut is applied within a
 		// segment, not only between segments.
-		if !limit.IsZero() && seg.Start.Before(limit) && seg.End.After(limit) {
+		if !limit.IsZero() && seg.End.After(limit) {
 			tail := Segment{Start: limit, End: seg.End, State: seg.State}
 			buf = append(buf, Segment{Start: seg.Start, End: limit, State: seg.State})
 			flush(limit)

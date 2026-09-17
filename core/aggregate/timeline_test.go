@@ -516,3 +516,130 @@ func TestParams_BoundaryDefaultsToSession(t *testing.T) {
 		t.Errorf("strict params boundary = %q, want %q", got, BoundaryStrict)
 	}
 }
+
+func TestSessions_CutsWhenTheBoundaryFallsBetweenSegments(t *testing.T) {
+	// The boundary needs no segment to straddle it: a state change (or a max_gap
+	// split) landing exactly on the hour leaves one segment ending at 04:00 and
+	// the next beginning there. The cut must still happen — and the limit must
+	// still advance, or every later boundary is missed too.
+	var samples []activity.Sample
+	samples = append(samples, genSamples("2026-07-09 20:00:00", "2026-07-10 03:55:00", 300, activity.Operating)...)
+	samples = append(samples, genSamples("2026-07-10 04:00:00", "2026-07-10 09:00:00", 300, activity.Present)...)
+
+	params := pStrict(10 * time.Minute)
+	sessions := Sessions(samples, params, utc)
+	if len(sessions) != 2 {
+		t.Fatalf("got %d sessions, want 2 (cut at 04:00): %+v", len(sessions), sessions)
+	}
+	cut := time.Date(2026, 7, 10, 4, 0, 0, 0, utc)
+	if !sessions[0].End.Equal(cut) || !sessions[0].CarriedOut {
+		t.Errorf("head ends %v (out=%v), want the boundary, carried out", sessions[0].End, sessions[0].CarriedOut)
+	}
+	if !sessions[1].Start.Equal(cut) || !sessions[1].CarriedIn {
+		t.Errorf("tail starts %v (in=%v), want the boundary, carried in", sessions[1].Start, sessions[1].CarriedIn)
+	}
+
+	// And the day ledgers must agree, which is the whole point of strict.
+	byDate := map[string]int{}
+	for _, d := range Timeline(samples, params, utc) {
+		byDate[d.Date] = d.ActiveSeconds()
+	}
+	for _, d := range ByDay(samples, params.MaxGap, utc, params.DayStartHour) {
+		want := int((d.Totals.Operating + d.Totals.Present).Seconds())
+		if got := byDate[d.Date]; got != want {
+			t.Errorf("%s: timeline %ds, report %ds", d.Date, got, want)
+		}
+	}
+}
+
+func TestSessions_BackstopFiresWhenSamplesLandOnTheBoundary(t *testing.T) {
+	// The same defect reached BoundarySession: with the limit left behind at a
+	// boundary that is never met again, a display that never sleeps ran past the
+	// 48h backstop. Samples every 15 minutes land exactly on 04:00.
+	samples := genSamples("2026-07-09 10:00:00", "2026-07-13 10:00:00", 900, activity.Present)
+
+	sessions := Sessions(samples, p(30*time.Minute), utc)
+	for i, s := range sessions {
+		// A session that itself began on a boundary spans exactly two logical
+		// days; anything past that is the limit having been left behind.
+		if s.Duration() > 48*time.Hour {
+			t.Errorf("session %d lasts %v; the backstop must keep it within 48h", i, s.Duration())
+		}
+	}
+	if len(sessions) < 2 {
+		t.Fatalf("got %d sessions, want the run cut by the backstop", len(sessions))
+	}
+}
+
+func TestSessions_StrictNoBoundaryIsSkippedOverAMultiDayRun(t *testing.T) {
+	// Every logical day in the span must get its own session, whatever the phase
+	// of the sampling ticker relative to the boundary.
+	for _, step := range []int{60, 300, 900, 901} {
+		var samples []activity.Sample
+		for _, offset := range []int{0, 7, 13} {
+			samples = genSamples(
+				time.Date(2026, 7, 9, 10, 0, offset, 0, utc).Format("2006-01-02 15:04:05"),
+				"2026-07-13 10:00:00", step, activity.Present)
+			sessions := Sessions(samples, pStrict(time.Duration(step*2)*time.Second), utc)
+			if len(sessions) != 5 {
+				t.Errorf("step %ds offset %ds: got %d sessions, want 5 (07-09..07-13)",
+					step, offset, len(sessions))
+			}
+			for i, s := range sessions {
+				if s.Duration() > 24*time.Hour {
+					t.Errorf("step %ds offset %ds: session %d lasts %v, past its day",
+						step, offset, i, s.Duration())
+				}
+			}
+		}
+	}
+}
+
+func TestSessions_StrictAcrossDaylightSaving(t *testing.T) {
+	// The boundary is a wall-clock hour, so a logical day across a DST change is
+	// 23 or 25 hours long and a strict session can run past 24h. That is the
+	// boundary doing its job, not a defect — but seconds must still be conserved,
+	// and the cut must still happen exactly once per calendar day.
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("tzdata unavailable")
+	}
+	params := pStrict(10 * time.Minute)
+	params.DayStartHour = 1 // 01:00, which 2026-11-01 passes twice
+
+	// 2026-10-31 20:00 EDT through 2026-11-02 06:00 EST, dense.
+	start := time.Date(2026, 10, 31, 20, 0, 0, 0, ny)
+	end := time.Date(2026, 11, 2, 6, 0, 0, 0, ny)
+	var samples []activity.Sample
+	for ts := start; !ts.After(end); ts = ts.Add(5 * time.Minute) {
+		samples = append(samples, activity.Sample{TS: ts, State: activity.Operating})
+	}
+
+	whole := Sessions(samples, p(10*time.Minute), ny)
+	cut := Sessions(samples, params, ny)
+	var wholeSecs, cutSecs int
+	for _, s := range whole {
+		wholeSecs += s.ActiveSeconds()
+	}
+	for _, s := range cut {
+		cutSecs += s.ActiveSeconds()
+	}
+	if wholeSecs != cutSecs {
+		t.Errorf("strict total %ds != session total %ds across a DST change", cutSecs, wholeSecs)
+	}
+
+	days := Timeline(samples, params, ny)
+	if len(days) != 3 {
+		t.Fatalf("got %d days, want 3 (10-31, 11-01, 11-02): %+v", len(days), days)
+	}
+	// The repeated hour makes 11-01 a 25-hour logical day.
+	var nov1 DayTimeline
+	for _, d := range days {
+		if d.Date == "2026-11-01" {
+			nov1 = d
+		}
+	}
+	if got := nov1.ActiveSeconds(); got != 25*3600 {
+		t.Errorf("2026-11-01 active = %ds, want 25h — the day the clocks went back", got)
+	}
+}
