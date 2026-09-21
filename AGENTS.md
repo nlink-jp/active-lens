@@ -68,11 +68,25 @@ core/
   boundary that is never reached again, and the session then runs to the next
   long absence. Whether it bites depends on the sampling tick's phase, so it
   fails silently — the regression tests pin several phases on purpose.
-- **A derivation reads further back than it displays.** `timeline` queries from
-  `since - lookback(cfg)` (48h + session_gap) so a session that began before the
-  window is derived whole; `buildTimeline` emits only in-range days and counts
+- **A derivation reads further back than it displays, and widens until it finds
+  a break.** `timeline` and `now` both go through `samplesForWindow`, which
+  starts at `since - lookback(cfg)` (48h + session_gap) and keeps widening by
+  48h until the stream begins after an away span of at least `session_gap`
+  (`aggregate.StartsAfterABreak`), capped at `maxLookback` (14 days, and the cap
+  is reported on stderr). `buildTimeline` emits only in-range days and counts
   only in-range samples. Querying exactly `[since, until]` makes a window's
   oldest day disagree with the same day in a wider window.
+  - **48h + session_gap is enough for one session and not for a chain of them.**
+    That bound is what this entry used to claim was provably sufficient. A
+    session is cut at the *second* day boundary after its first active segment,
+    so a read that begins one logical day later than the real start cuts a day
+    later — and every session after it is shifted by that day. Measured on 120h
+    of unbroken activity: from a window offset of 71.5h onwards the window's
+    session came out `09-13 05:00 → 09-15 05:00` where the whole stream gave
+    `09-12 05:00 → 09-14 05:00`. A Mac kept awake for more than two days is all
+    it takes. `cmd.TestSamplesForWindowDoNotDependOnWhereTheReadBegins` sweeps
+    the phases, because which ones bite depends on where the read lands in the
+    day.
 - **`present` never times out.** `Classify` returns `present` for as long as the
   display is on and the machine unlocked, so a Mac held awake emits an activity
   run that never ends on its own. That is why `Sessions()` has a backstop: under

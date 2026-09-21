@@ -68,6 +68,35 @@ func (p Params) cutAfter(t time.Time) time.Time {
 	return secondBoundaryAfter(t, p.DayStartHour)
 }
 
+// StartsAfterABreak reports whether a sample stream begins at a point from
+// which sessions derive the same as they would from any longer stream: its
+// first activity is preceded, inside the stream, by an away span of at least
+// SessionGap. That absence is what opens a session, so the session it opens —
+// and every boundary cut after it — is computed from the same instant however
+// far back the stream reaches.
+//
+// A stream that begins inside activity has no such anchor. The first session's
+// cut is `cutAfter(first active segment)`, which under BoundarySession is the
+// *second* day boundary after it, so a stream that begins one logical day later
+// than the real start cuts a day later, and every session after it is shifted
+// by that day. Measured on 120 h of unbroken activity: window starts from 71.5 h
+// onwards derived `09-13 05:00 → 09-15 05:00` where the whole stream derived
+// `09-12 05:00 → 09-14 05:00`. A Mac kept awake for longer than two days is all
+// it takes, which is why the callers widen the read until this returns true
+// (`cmd.samplesForWindow`).
+func StartsAfterABreak(samples []activity.Sample, p Params, loc *time.Location) bool {
+	for _, seg := range Segments(samples, p.MaxGap, loc) {
+		if isActive(seg.State) {
+			return false
+		}
+		if p.SessionGap > 0 && seg.Duration() >= p.SessionGap {
+			return true
+		}
+	}
+	// No activity at all: there is no session to anchor, and none to get wrong.
+	return true
+}
+
 // Segments collapses the sample stream into contiguous same-state spans (times
 // in loc). It uses the same interval attribution as the totals aggregation —
 // each gap up to maxGap is credited to the earlier sample's state, and any

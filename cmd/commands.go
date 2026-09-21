@@ -100,17 +100,68 @@ func runDaemon(args []string) error {
 
 // --- now ------------------------------------------------------------------
 
-// lookback is how far before a window the sample stream must be read for the
-// sessions inside it to come out the same as they would in a wider range. A
-// session is bounded at 48h by the day-boundary cut, and the absence that opens
-// one is at most a session_gap longer, so this provably contains the whole
-// session that the window's first instant belongs to.
+// lookback is the first step back before a window, and the one reported to the
+// user. A single session is bounded at 48h by the day-boundary cut and the
+// absence that opens one is at most a session_gap longer, so this contains the
+// session the window's first instant belongs to — but not the *chain* of
+// sessions a Mac kept awake produces, each cut at a boundary and the next
+// beginning there. `samplesForWindow` widens the read until it reaches a real
+// break; see `aggregate.StartsAfterABreak`.
 //
-// Without it, the oldest day of a `--days N` window is derived from a stream
-// that begins exactly at its boundary: work already under way looks like work
-// that started there, and the day loses the carried_in that says otherwise.
+// Without any lookback, the oldest day of a `--days N` window is derived from a
+// stream that begins exactly at its boundary: work already under way looks like
+// work that started there, and the day loses the carried_in that says otherwise.
 func lookback(cfg config.Config) time.Duration {
 	return 48*time.Hour + time.Duration(cfg.SessionGapMinutes)*time.Minute
+}
+
+// maxLookback caps how far `samplesForWindow` will read back when the machine
+// has been awake without a break. Two weeks of chained sessions is already far
+// past anything seen; beyond it the derivation is the best the cap allows, and
+// says so on stderr, so a `--json` consumer's stdout stays a document.
+const maxLookback = 14 * 24 * time.Hour
+
+// samplesForWindow reads [since-lookback, until] and keeps widening the read
+// until the stream begins after a break, so the sessions inside the window do
+// not depend on where the read happened to start.
+func samplesForWindow(st sampleQuerier, since, until time.Time,
+	cfg config.Config, loc *time.Location) ([]activity.Sample, bool, error) {
+	p := paramsOf(cfg)
+	back := lookback(cfg)
+	for {
+		samples, err := st.Query(since.Add(-back), until)
+		if err != nil {
+			return nil, false, err
+		}
+		if aggregate.StartsAfterABreak(samples, p, loc) {
+			return samples, false, nil
+		}
+		if back >= maxLookback {
+			return samples, true, nil
+		}
+		back += 48 * time.Hour
+		if back > maxLookback {
+			back = maxLookback
+		}
+	}
+}
+
+// noteIfCapped says so when the read stopped at `maxLookback` without finding a
+// break, because the session boundaries then depend on where it stopped. On
+// stderr: stdout may be a JSON document.
+func noteIfCapped(w io.Writer, capped bool) {
+	if !capped {
+		return
+	}
+	fmt.Fprintf(w, "active-lens: this Mac has been awake without a break for longer than %s, "+
+		"so session boundaries are derived from that point and may differ from a longer view\n",
+		maxLookback)
+}
+
+// sampleQuerier is the part of the store this file needs, so the widening can
+// be tested without a database.
+type sampleQuerier interface {
+	Query(since, until time.Time) ([]activity.Sample, error)
 }
 
 func runNow(args []string) error {
@@ -131,10 +182,11 @@ func runNow(args []string) error {
 
 	loc := time.Local
 	now := time.Now().In(loc)
-	samples, err := st.Query(now.Add(-lookback(cfg)), now)
+	samples, capped, err := samplesForWindow(st, now, now, cfg, loc)
 	if err != nil {
 		return err
 	}
+	noteIfCapped(os.Stderr, capped)
 	n := buildNow(samples, now, staleAfter(cfg), paramsOf(cfg), loc)
 
 	if *asJSON {
@@ -216,10 +268,11 @@ func runTimeline(args []string) error {
 	defer st.Close()
 	// Read before the window so a session that began earlier is derived whole;
 	// buildTimeline emits only the days inside [since, until].
-	samples, err := st.Query(since.Add(-lookback(cfg)), until)
+	samples, capped, err := samplesForWindow(st, since, until, cfg, loc)
 	if err != nil {
 		return err
 	}
+	noteIfCapped(os.Stderr, capped)
 	tl := buildTimeline(samples, since, until, paramsOf(cfg), loc)
 
 	if *asJSON {

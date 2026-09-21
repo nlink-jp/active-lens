@@ -4,6 +4,18 @@ All notable changes to active-lens are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **On a Mac kept awake for more than two days, sessions could be reported a
+  whole day later than they were.** The derivation read a fixed 48 hours before
+  the window, which holds one session but not a chain of them: each is cut at a
+  day boundary and the next begins there, so a read that started mid-chain cut
+  its first session a day late and shifted every session after it. The read now
+  widens until it reaches a real break (a gap of at least `session_gap`), up to
+  14 days, and says on stderr when that cap is reached.
+
 ## [0.3.0] - 2026-09-17
 
 ### Added
