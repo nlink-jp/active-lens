@@ -4,7 +4,7 @@ All notable changes to active-lens are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] - 2026-09-21
 
 ### Fixed
 
