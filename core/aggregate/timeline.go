@@ -374,8 +374,9 @@ const (
 )
 
 // Block is a session's coarse structure: the unit a pointer can actually hit.
-// Raw segments alternate operating/present every few minutes and are sub-pixel
-// on a day column, so the GUI hit-tests blocks and draws segments.
+// Raw segments alternate operating/present every minute or so and are sub-pixel
+// on a day column, so the GUI draws and hit-tests blocks, shading each by the
+// segments inside it.
 type Block struct {
 	Kind  BlockKind
 	Start time.Time

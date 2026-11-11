@@ -56,6 +56,7 @@ func walkSegments(samples []activity.Sample, p Params, loc *time.Location, fn fu
 }
 
 // emitSplit slices [start,end) at local hour boundaries and calls fn per piece.
+// Every step moves strictly forward (see nextHour), so it terminates.
 func emitSplit(start, end time.Time, st activity.State, loc *time.Location, fn func(start time.Time, dur time.Duration, st activity.State)) {
 	start = start.In(loc)
 	end = end.In(loc)
@@ -71,9 +72,18 @@ func emitSplit(start, end time.Time, st activity.State, loc *time.Location, fn f
 }
 
 // nextHour returns the start of the hour strictly after t, in t's location.
+//
+// It steps forward from t by what is left of t's own hour, rather than
+// rebuilding the hour from its calendar fields. When clocks fall back a local
+// hour happens twice, and time.Date resolves the repeated "01:00" to its first
+// occurrence — so from inside the second one the rebuilt hour plus one landed
+// back on the instant it started from, and the split never advanced. A zone on
+// summer time hung `report` and `today` on the night it ended.
 func nextHour(t time.Time) time.Time {
-	y, m, d := t.Date()
-	return time.Date(y, m, d, t.Hour(), 0, 0, 0, t.Location()).Add(time.Hour)
+	into := time.Duration(t.Minute())*time.Minute +
+		time.Duration(t.Second())*time.Second +
+		time.Duration(t.Nanosecond())
+	return t.Add(time.Hour - into)
 }
 
 // Range returns the grand totals across all samples.
