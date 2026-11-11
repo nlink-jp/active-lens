@@ -103,6 +103,14 @@ func Load(path, dataDir string) (Config, error) {
 const (
 	maxSeconds = 366 * 24 * 60 * 60
 	maxMinutes = 366 * 24 * 60
+	// The limits below are what a read can honour. A command reads 48 hours
+	// (plus session_gap) either side of the window it is asked for, and what it
+	// derives must not depend on that window. A rule whose reach is longer than
+	// the read, or a sampling gap credited for longer than the read, makes a
+	// day's figures change with the window around it.
+	maxRuleMinutes  = 48 * 60      // idle_before_away, brief_visit
+	maxGapSeconds   = 24 * 60 * 60 // max_gap
+	maxIntervalSecs = maxGapSeconds / 3
 )
 
 // apply overlays parsed TOML onto cfg. Exposed via Load; separated for testing.
@@ -134,8 +142,8 @@ func apply(cfg Config, data []byte) (Config, error) {
 	}
 	if v, ok := kv["sampling.interval_seconds"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 || n > maxSeconds {
-			return cfg, fmt.Errorf("sampling.interval_seconds: want integer 1..%d, got %q", maxSeconds, v)
+		if err != nil || n <= 0 || n > maxIntervalSecs {
+			return cfg, fmt.Errorf("sampling.interval_seconds: want integer 1..%d, got %q", maxIntervalSecs, v)
 		}
 		cfg.IntervalSeconds = n
 		// Keep the derived default in sync unless max_gap is set explicitly.
@@ -154,8 +162,8 @@ func apply(cfg Config, data []byte) (Config, error) {
 	}
 	if v, ok := kv["sampling.max_gap_seconds"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 || n > maxSeconds {
-			return cfg, fmt.Errorf("sampling.max_gap_seconds: want integer 1..%d, got %q", maxSeconds, v)
+		if err != nil || n <= 0 || n > maxGapSeconds {
+			return cfg, fmt.Errorf("sampling.max_gap_seconds: want integer 1..%d, got %q", maxGapSeconds, v)
 		}
 		cfg.MaxGapSeconds = n
 	}
@@ -175,15 +183,15 @@ func apply(cfg Config, data []byte) (Config, error) {
 	}
 	if v, ok := kv["work.idle_before_away_minutes"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 || n > maxMinutes {
-			return cfg, fmt.Errorf("work.idle_before_away_minutes: want integer 0..%d, got %q", maxMinutes, v)
+		if err != nil || n < 0 || n > maxRuleMinutes {
+			return cfg, fmt.Errorf("work.idle_before_away_minutes: want integer 0..%d, got %q", maxRuleMinutes, v)
 		}
 		cfg.IdleBeforeAwayMinutes = n
 	}
 	if v, ok := kv["work.brief_visit_minutes"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 || n > maxMinutes {
-			return cfg, fmt.Errorf("work.brief_visit_minutes: want integer 0..%d, got %q", maxMinutes, v)
+		if err != nil || n < 0 || n > maxRuleMinutes {
+			return cfg, fmt.Errorf("work.brief_visit_minutes: want integer 0..%d, got %q", maxRuleMinutes, v)
 		}
 		cfg.BriefVisitMinutes = n
 	}

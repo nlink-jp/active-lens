@@ -587,9 +587,12 @@ func resolveRange(sinceStr, untilStr string, loc *time.Location, dayStartHour in
 		until = dayStartFor(d.Format("2006-01-02"), loc, dayStartHour).AddDate(0, 0, 1)
 	}
 
-	if until.Before(since) {
+	// `until` is the exclusive end. `--until` one day before `--since` makes the
+	// two equal: an empty window whose reported end precedes its start, which
+	// passed a check that only refused `until` strictly before `since`.
+	if !until.After(since) {
 		return since, until, fmt.Errorf("--until (%s) is before --since (%s)",
-			until.Format("2006-01-02"), since.Format("2006-01-02"))
+			until.Add(-time.Second).Format("2006-01-02"), since.Format("2006-01-02"))
 	}
 	return since, until, nil
 }

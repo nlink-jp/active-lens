@@ -179,8 +179,9 @@ func TestApply_RejectsValuesThatOverflowOrAreNotNumbers(t *testing.T) {
 		}
 	}
 	// The bound itself is accepted.
-	if _, err := apply(Defaults("/data"), []byte("[work]\nidle_before_away_minutes = 527040\n")); err != nil {
-		t.Errorf("the upper bound was rejected: %v", err)
+	if _, err := apply(Defaults("/data"), []byte("[work]\nidle_before_away_minutes = 2880\nbrief_visit_minutes = 2880\n"+
+		"[sampling]\ninterval_seconds = 28800\nmax_gap_seconds = 86400\n")); err != nil {
+		t.Errorf("the upper bounds were rejected: %v", err)
 	}
 }
 
@@ -228,5 +229,21 @@ func TestApply_RejectsUnknownKeys(t *testing.T) {
 		"[storage]\ndb_path = \"/tmp/x.db\"\n"
 	if _, err := apply(Defaults("/data"), []byte(all)); err != nil {
 		t.Errorf("the documented keys were rejected: %v", err)
+	}
+}
+
+// A rule that reaches further than a command reads, or a sampling gap credited
+// for longer than that, would make a day's figures depend on the window asked
+// for: the read is 48 hours either side.
+func TestApply_RejectsReachBeyondWhatARead_CanHonour(t *testing.T) {
+	for _, bad := range []string{
+		"[work]\nidle_before_away_minutes = 2881\n",
+		"[work]\nbrief_visit_minutes = 6000\n",
+		"[sampling]\nmax_gap_seconds = 86401\n",
+		"[sampling]\ninterval_seconds = 28801\n",
+	} {
+		if _, err := apply(Defaults("/data"), []byte(bad)); err == nil {
+			t.Errorf("apply(%q) = nil error, want error", bad)
+		}
 	}
 }

@@ -181,42 +181,172 @@ func TestSamplesForWindow_StopsAtNowWhenUntilIsLater(t *testing.T) {
 	}
 }
 
-// Adding the neighbours must not move the work log. Each stream is derived
-// from the command's read with them and from the same read without.
-func TestSamplesForWindow_NeighboursDoNotMoveTheWorkLog(t *testing.T) {
-	cfg := config.Defaults("/data")
+// What a command derives from its read must be what the whole record gives:
+// that is the point of reading past the window and of the neighbours. Streams
+// are built from a seed — work, breaks, touches, idles and silences of up to
+// eleven days — and each window's timeline days and report are compared with
+// the same derivation over every sample.
+func TestReadsGiveWhatTheWholeRecordGives(t *testing.T) {
 	loc := time.UTC
-	base := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
 	op, pr, aw := activity.Operating, activity.Present, activity.Away
-	streams := map[string][]activity.Sample{
-		"anchored, continuous": lay(base, part{time.Hour, op}, part{9 * time.Hour, aw}, part{3 * time.Hour, op},
-			part{30 * time.Minute, aw}, part{2 * time.Hour, pr}, part{200 * time.Hour, aw}, part{3 * time.Hour, op}, part{40 * time.Hour, aw}),
-		"a week with no samples": append(lay(base, part{10 * time.Hour, op}),
-			lay(base.AddDate(0, 0, 8), part{5 * time.Hour, op}, part{20 * time.Minute, aw}, part{2 * time.Hour, op}, part{30 * time.Hour, aw})...),
-		"begins in activity":    lay(base.AddDate(0, 0, 7), part{30 * time.Hour, op}, part{20 * time.Hour, aw}, part{4 * time.Hour, op}),
-		"awake for twenty days": lay(base.AddDate(0, 0, -12), part{20 * 24 * time.Hour, op}, part{40 * time.Hour, aw}),
-	}
-	for name, all := range streams {
-		for day := 5; day <= 11; day++ {
-			since := time.Date(2026, 7, day, 4, 0, 0, 0, loc)
-			until := since.AddDate(0, 0, 2)
-			with, _, err := samplesForWindow(&wholeStream{samples: all}, since, until, cfg, loc)
-			if err != nil {
-				t.Fatal(err)
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, loc)
+	for _, boundary := range []string{config.DayBoundarySession, config.DayBoundaryStrict} {
+		cfg := config.Defaults("/data")
+		cfg.DayBoundary = boundary
+		for seed := uint64(1); seed <= 40; seed++ {
+			r := seed * 2654435761
+			next := func(n uint64) uint64 { r = r*6364136223846793005 + 1442695040888963407; return (r >> 33) % n }
+			var all []activity.Sample
+			at := base
+			for at.Before(base.AddDate(0, 0, 30)) {
+				var p part
+				switch next(10) {
+				case 0, 1, 2:
+					p = part{time.Duration(10+next(240)) * time.Minute, op}
+				case 3:
+					p = part{time.Duration(1+next(14)) * time.Minute, pr}
+				case 4, 5:
+					p = part{time.Duration(1+next(40)) * time.Minute, aw}
+				case 6:
+					p = part{time.Duration(15+next(120)) * time.Second, op} // a touch
+				case 7:
+					p = part{time.Duration(4+next(20)) * time.Hour, aw}
+				case 8:
+					p = part{time.Duration(1+next(5)) * time.Hour, aw}
+				default: // nothing recorded at all, for up to eleven days
+					at = at.Add(time.Duration(2+next(260)) * time.Hour)
+					continue
+				}
+				all = append(all, lay(at, p)...)
+				at = at.Add(p.d)
 			}
-			bare, _, _ := samplesForWindow(&wholeStream{samples: all, noNeighbours: true}, since, until, cfg, loc)
-			if name == "a week with no samples" && day == 5 && len(with) == len(bare) {
-				t.Fatalf("the scenario no longer exercises a neighbour (both reads hold %d samples)", len(with))
+			whole := buildTimeline(all, base.AddDate(0, 0, -3), base.AddDate(0, 0, 40), paramsOf(cfg), loc)
+			wholeDay := map[string]jsonDayTimeline{}
+			for _, d := range whole.Days {
+				wholeDay[d.Date] = d
 			}
-			a := buildTimeline(with, since, until, paramsOf(cfg), loc)
-			b := buildTimeline(bare, since, until, paramsOf(cfg), loc)
-			if !reflect.DeepEqual(a.Days, b.Days) {
-				t.Errorf("%s, window 07-%02d: the timeline differs with the neighbours added", name, day)
-			}
-			now := until
-			if an, bn := buildNow(with, now, time.Minute, paramsOf(cfg), loc), buildNow(bare, now, time.Minute, paramsOf(cfg), loc); !reflect.DeepEqual(an.Session, bn.Session) {
-				t.Errorf("%s, window 07-%02d: the now-session differs with the neighbours added", name, day)
+			for day := 2; day <= 28; day += 3 {
+				since := time.Date(2026, 7, day, 4, 0, 0, 0, loc)
+				for _, span := range []int{1, 3} {
+					until := since.AddDate(0, 0, span)
+					samples, capped, err := samplesForWindow(&wholeStream{samples: all}, since, until, cfg, loc)
+					if err != nil || capped {
+						t.Fatalf("seed %d: capped=%v err=%v", seed, capped, err)
+					}
+					for _, d := range buildTimeline(samples, since, until, paramsOf(cfg), loc).Days {
+						if !reflect.DeepEqual(d, wholeDay[d.Date]) {
+							t.Fatalf("%s seed %d, %s asked as %d day(s) from 07-%02d: the timeline day differs from the whole record's",
+								boundary, seed, d.Date, span, day)
+						}
+					}
+					rep := buildReport(samples, since, until, paramsOf(cfg), loc)
+					if want := wholeTotals(all, cfg, since, until); rep.Total != want {
+						t.Fatalf("%s seed %d, report 07-%02d + %d day(s): %+v, the whole record says %+v",
+							boundary, seed, day, span, rep.Total, want)
+					}
+				}
 			}
 		}
+	}
+}
+
+// A laptop shut on Friday and opened on Monday: the read for Friday ends inside
+// the silence. Its last sample is credited as the whole record credits it, and
+// the away after it is seen, so the idle before it is the absence.
+func TestTimeline_AReadEndingInASilenceSeesTheAwayAfterIt(t *testing.T) {
+	cfg := config.Defaults("/data")
+	loc := time.UTC
+	fri := time.Date(2026, 7, 10, 4, 0, 0, 0, loc)
+	all := append(lay(fri.Add(-12*time.Hour), part{17 * time.Hour, activity.Away},
+		part{8 * time.Hour, activity.Operating}, part{4 * time.Minute, activity.Present}), // lid shut at 17:04
+		lay(fri.Add(77*time.Hour), part{2 * time.Hour, activity.Operating}, part{30 * time.Hour, activity.Away})...)
+	got := dayOf(t, all, cfg, fri, fri.AddDate(0, 0, 1), "2026-07-10")
+	whole := dayOf(t, all, cfg, fri.AddDate(0, 0, -2), fri.AddDate(0, 0, 6), "2026-07-10")
+	if !reflect.DeepEqual(got, whole) {
+		t.Errorf("Friday asked alone differs from Friday in the whole week:\n alone %+v\n whole %+v", got, whole)
+	}
+	if want := fri.Add(13 * time.Hour).Unix(); got.WorkEndUnix != want || got.PresentSeconds != 0 {
+		t.Errorf("work ends %d with %ds present; want 17:00 (%d) and none — the four idle minutes were the lid closing",
+			got.WorkEndUnix, got.PresentSeconds, want)
+	}
+}
+
+// After two weeks off, a thirty-second touch, a quarter of an hour away, then
+// work: the touch is a visit, in `timeline` and in `now` alike.
+func TestNowAndTimeline_ATouchAfterALongSilenceIsAVisit(t *testing.T) {
+	cfg := config.Defaults("/data")
+	loc := time.UTC
+	back := time.Date(2026, 7, 15, 9, 0, 0, 0, loc)
+	all := append(lay(time.Date(2026, 7, 1, 9, 0, 0, 0, loc), part{2 * time.Hour, activity.Operating}),
+		lay(back, part{30 * time.Second, activity.Operating}, part{15 * time.Minute, activity.Away},
+			part{3 * time.Hour, activity.Operating}, part{10 * time.Minute, activity.Away})...)
+	workStart := back.Add(15*time.Minute + 30*time.Second).Unix()
+
+	d := dayOf(t, all, cfg, time.Date(2026, 7, 15, 4, 0, 0, 0, loc), time.Date(2026, 7, 16, 4, 0, 0, 0, loc), "2026-07-15")
+	if d.WorkStartUnix != workStart || len(d.Breaks) != 0 {
+		t.Errorf("timeline: work starts %d with %d breaks; want %d and none", d.WorkStartUnix, len(d.Breaks), workStart)
+	}
+	now := back.Add(4 * time.Hour)
+	defer func(f func() time.Time) { clockNow = f }(clockNow)
+	clockNow = func() time.Time { return now }
+	samples, _, err := samplesForWindow(&wholeStream{samples: all}, now, now, cfg, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := buildNow(samples, now, time.Minute, paramsOf(cfg), loc); n.Session == nil || n.Session.StartUnix != workStart {
+		t.Errorf("now: session %+v; want it to start at %d, as the timeline's does", n.Session, workStart)
+	}
+}
+
+// The daemon stopped three days ago. `now` has nothing in reach, and must not
+// report the state of a marker it added itself.
+func TestNow_WithNothingInReachReportsNoState(t *testing.T) {
+	cfg := config.Defaults("/data")
+	loc := time.UTC
+	last := time.Date(2026, 7, 9, 9, 0, 0, 0, loc)
+	all := lay(last.Add(-3*time.Hour), part{3 * time.Hour, activity.Operating})
+	now := last.Add(72 * time.Hour)
+	defer func(f func() time.Time) { clockNow = f }(clockNow)
+	clockNow = func() time.Time { return now }
+	samples, _, err := samplesForWindow(&wholeStream{samples: all}, now, now, cfg, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := buildNow(samples, now, time.Minute, paramsOf(cfg), loc)
+	if n.State != "" || n.Session != nil || n.Recording {
+		t.Errorf("now = state %q, session %+v, recording %v; want nothing — no sample was read", n.State, n.Session, n.Recording)
+	}
+}
+
+// The record begins part-way through the window, and ends a little before now.
+func TestReport_CountsNothingOutsideTheRecord(t *testing.T) {
+	cfg := config.Defaults("/data")
+	loc := time.UTC
+	day := time.Date(2026, 7, 9, 4, 0, 0, 0, loc)
+	first := day.Add(6 * time.Hour) // the first sample ever, at 10:00
+	all := lay(first, part{2 * time.Hour, activity.Operating}, part{time.Hour, activity.Away})
+	lastSample := all[len(all)-1].TS
+
+	// A whole day, the record starting inside it.
+	r := reportOf(t, all, cfg, day, day.AddDate(0, 0, 1))
+	if got, want := sumTotals(r.Total), int64(lastSample.Sub(first).Seconds()); got != want {
+		t.Errorf("the day totals %ds; want %ds — only first sample to last, nothing before 10:00", got, want)
+	}
+	// `today`: until is now, a few minutes after the last sample.
+	now := lastSample.Add(7 * time.Minute)
+	defer func(f func() time.Time) { clockNow = f }(clockNow)
+	clockNow = func() time.Time { return now }
+	r = reportOf(t, all, cfg, day, now)
+	if got, want := sumTotals(r.Total), int64(lastSample.Sub(first).Seconds()); got != want {
+		t.Errorf("until now totals %ds; want %ds — nothing after the last sample", got, want)
+	}
+}
+
+func TestResolveRange_UntilMustComeAfterSince(t *testing.T) {
+	if _, _, err := resolveRange("2026-07-10", "2026-07-09", time.UTC, 4); err == nil {
+		t.Error("--until the day before --since gave an empty window instead of an error")
+	}
+	if _, _, err := resolveRange("2026-07-10", "2026-07-10", time.UTC, 4); err != nil {
+		t.Errorf("a single day is a valid range: %v", err)
 	}
 }

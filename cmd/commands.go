@@ -141,9 +141,11 @@ func lookback(cfg config.Config) time.Duration {
 // says so on stderr, so a `--json` consumer's stdout stays a document.
 const maxLookback = 14 * 24 * time.Hour
 
-// samplesForWindow reads [since-lookback, until+lookback] and keeps widening the
-// read backwards until the stream begins after a break, so the sessions inside
-// the window do not depend on where the read happened to start — or stop.
+// samplesForWindow reads [since-lookback, until+lookback], widens the read
+// backwards until the stream begins after a break, and returns it with one
+// neighbour sample outside each end (see withNeighbours; the one in front has
+// its state rewritten to away). The aim is that what is derived for the window
+// is what the whole record would give, wherever the read started or stopped.
 //
 // The read runs past `until` because a session is filed, whole, under the day it
 // started in: stopping at `until` cut a session still running there, so a day's
@@ -209,15 +211,34 @@ func samplesForWindow(st sampleQuerier, since, until time.Time,
 // attribution turns it into away. Before the first sample ever and after the
 // last there is no neighbour, and nothing is counted there.
 //
-// The work log does not move. The sample in front is added as a marker of
-// where the record resumes from, in the away state whatever it recorded: its
-// own state would be credited for up to max_gap, a sliver of activity at least
-// 48 h before the window that `now` would show as the last session when
-// nothing has been done since. As away it opens no session and leaves the first
-// active segment — the instant sessions and their day-boundary cuts are
-// measured from — where it was. The sample behind has no interval after it, so
-// it adds no activity, only the time up to it.
+// What this changes in the work log is what the bare read got wrong, and each
+// change is toward what the whole record gives. A read that ends inside a
+// silence now sees the away after its last sample, so that sample is credited
+// its max_gap and the rules that look at "the away after" apply to the tail. A
+// read whose head follows a long silence now sees the away before its first
+// run, so a brief first touch is a visit rather than "a run at the head, left
+// alone". With `until` at now there is no sample behind, and a record without
+// such silences reads exactly as before.
+//
+// The sample in front is added as a marker of where the record resumes from,
+// in the away state whatever it recorded: its own state would be credited for
+// up to max_gap, a sliver of activity at least 48 h before the window that
+// `now` would show as the last session when nothing has been done since. As
+// away it opens no session. The sample behind has no interval after it.
 func withNeighbours(st sampleQuerier, samples []activity.Sample, from, to, now time.Time) ([]activity.Sample, error) {
+	after, ok, err := st.FirstAfter(to)
+	if err != nil {
+		return nil, err
+	}
+	if ok && !after.TS.After(now) {
+		samples = append(samples, after)
+	}
+	// The marker is only an end for an interval to start from. With nothing
+	// after it there is no interval, and standing alone it would be the latest
+	// sample `now` reports the state of — an "away" that was never recorded.
+	if len(samples) == 0 {
+		return samples, nil
+	}
 	before, ok, err := st.LastBefore(from)
 	if err != nil {
 		return nil, err
@@ -225,13 +246,6 @@ func withNeighbours(st sampleQuerier, samples []activity.Sample, from, to, now t
 	if ok {
 		marker := activity.Sample{TS: before.TS, State: activity.Away}
 		samples = append([]activity.Sample{marker}, samples...)
-	}
-	after, ok, err := st.FirstAfter(to)
-	if err != nil {
-		return nil, err
-	}
-	if ok && !after.TS.After(now) {
-		samples = append(samples, after)
 	}
 	return samples, nil
 }
@@ -251,8 +265,8 @@ func earliestSample(samples []activity.Sample) time.Time {
 }
 
 // noteIfCapped says so when the read stopped at `maxLookback` without finding a
-// break, because the session boundaries then depend on where it stopped. On
-// stderr: stdout may be a JSON document.
+// break, because what is derived then depends on where it stopped. On stderr:
+// stdout may be a JSON document.
 func noteIfCapped(w io.Writer, capped bool) {
 	if !capped {
 		return
@@ -388,7 +402,9 @@ func runTimeline(args []string) error {
 	}
 	printTimelineHuman(os.Stdout, tl, loc)
 	if tl.SampleCount == 0 {
-		fmt.Println("\nNo samples in this range. Is the daemon running? Try: active-lens status")
+		// Not "is the daemon running?": a range the record brackets has no
+		// samples because the machine was asleep through it.
+		fmt.Println("\nNo samples in this range: nothing was recorded during it (the machine was asleep, or the daemon was not running). Check: active-lens status")
 	}
 	return nil
 }
