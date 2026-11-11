@@ -6,7 +6,37 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **A touch between two absences is no longer work.** Activity of at most
+  `work.brief_visit_minutes` (new, default 2) with an away of at least
+  `break_minutes` on both sides is aggregated as away. Thirty seconds at the
+  keyboard three hours after leaving used to turn those three hours into a break
+  inside the session and move the session's end to the touch; a minute at the
+  machine between two nights was a working day of its own. **History re-derives
+  and its numbers change**: on the record this was designed against (125 days)
+  57 such runs, 72 minutes in all, stop being work, four sessions that stood
+  alone disappear, a session ends earlier in two places, and there are fewer
+  breaks. Work done in two minutes or less between two breaks goes with them.
+  Set `brief_visit_minutes = 0` for the previous numbers. See
+  [ADR 0004](docs/en/adr/0004-brief-visit.md).
+- At the live edge, `now` shows a session resumed (or begun) by such a touch and
+  withdraws it once the absence after it has reached `break_minutes`.
+
+### Added
+
+- `timeline --json` publishes `brief_visit_seconds` in its header (0 when the
+  rule is off). `doctor` prints the resolved setting.
+
 ### Fixed
+
+- **`timeline --until <a past day>` no longer cuts a session at the end of that
+  day.** The read stopped at `until`, so a session still running there came out
+  short and the day's end and active time depended on the `--until` it was asked
+  with (one day measured 8.9 h asked for alone and 18.6 h asked for with the two
+  days after). The read now runs on to where such a session ends; the days
+  emitted are unchanged. A window ending now — `--days N`, which the GUI uses —
+  was never affected.
 
 - **`report` and `today` no longer hang when clocks fall back.** The split at
   local hour boundaries rebuilt each hour from its calendar fields; in the hour

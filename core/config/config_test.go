@@ -183,3 +183,27 @@ func TestApply_RejectsValuesThatOverflowOrAreNotNumbers(t *testing.T) {
 		t.Errorf("the upper bound was rejected: %v", err)
 	}
 }
+
+func TestBriefVisit(t *testing.T) {
+	if c := Defaults("/data"); c.BriefVisitMinutes != 2 {
+		t.Errorf("default BriefVisitMinutes = %d, want 2", c.BriefVisitMinutes)
+	}
+	for in, want := range map[string]int{
+		"[work]\nbrief_visit_minutes = 0\n": 0,
+		"[work]\nbrief_visit_minutes = 5\n": 5,
+	} {
+		c, err := apply(Defaults("/data"), []byte(in))
+		if err != nil || c.BriefVisitMinutes != want {
+			t.Errorf("apply(%q) = %d, %v; want %d", in, c.BriefVisitMinutes, err, want)
+		}
+	}
+	for _, bad := range []string{
+		"[work]\nbrief_visit_minutes = -1\n",
+		"[work]\nbrief_visit_minutes = briefly\n",
+		"[work]\nbrief_visit_minutes = 153722868\n",
+	} {
+		if _, err := apply(Defaults("/data"), []byte(bad)); err == nil {
+			t.Errorf("apply(%q) = nil error, want error", bad)
+		}
+	}
+}

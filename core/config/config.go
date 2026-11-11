@@ -38,6 +38,11 @@ type Config struct {
 	// began when input stopped, not when the display timer fired. Match it to
 	// the display-sleep timeout. Zero disables the rule. See ADR 0003.
 	IdleBeforeAwayMinutes int
+	// BriefVisitMinutes is the longest run of activity (in minutes) that, lying
+	// between two away spans each at least BreakMinutes long, is not counted as
+	// work: a touch in the middle of an absence. Zero disables the rule. See
+	// ADR 0004.
+	BriefVisitMinutes int
 	// DayBoundary selects what a logical day boundary does to a session in
 	// progress: DayBoundarySession files the session whole under the day it
 	// started in, DayBoundaryStrict ends it at the boundary and opens a new one
@@ -69,6 +74,7 @@ func Defaults(dataDir string) Config {
 		BreakMinutes:           10,
 		SessionGapMinutes:      240,
 		IdleBeforeAwayMinutes:  10,
+		BriefVisitMinutes:      2,
 		DayStartHour:           4,
 		DayBoundary:            DayBoundarySession,
 		DBPath:                 filepath.Join(dataDir, "activity.db"),
@@ -152,6 +158,13 @@ func apply(cfg Config, data []byte) (Config, error) {
 			return cfg, fmt.Errorf("work.idle_before_away_minutes: want integer 0..%d, got %q", maxMinutes, v)
 		}
 		cfg.IdleBeforeAwayMinutes = n
+	}
+	if v, ok := kv["work.brief_visit_minutes"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > maxMinutes {
+			return cfg, fmt.Errorf("work.brief_visit_minutes: want integer 0..%d, got %q", maxMinutes, v)
+		}
+		cfg.BriefVisitMinutes = n
 	}
 	if v, ok := kv["work.day_start_hour"]; ok {
 		n, err := strconv.Atoi(v)

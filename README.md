@@ -78,6 +78,13 @@ which the display came back within a minute. Match the setting to your
 display-sleep timeout; `0` turns it off. See
 [ADR 0003](docs/en/adr/0003-idle-before-away.md).
 
+**A touch in the middle of an absence.** Activity of at most
+`work.brief_visit_minutes` (default 2) that has an away of at least
+`break_minutes` on both sides is not counted as work: the break went on. Without
+this, thirty seconds at the keyboard three hours after you left turns those three
+hours into a "break" and moves the end of the session to that touch. `0` counts
+every touch as work. See [ADR 0004](docs/en/adr/0004-brief-visit.md).
+
 A session is never split at midnight. It is filed, whole, under the **logical
 day** it started in — the day that begins at `work.day_start_hour` (default
 04:00) rather than at 00:00. So an evening that runs to 00:59 belongs to the
@@ -216,6 +223,7 @@ Optional `config.toml` in `~/Library/Application Support/active-lens/`
 | `work.break_minutes` | `10` | Min away span counted as a break inside a session |
 | `work.session_gap_minutes` | `240` | Away span that ends a session; must exceed `break_minutes` |
 | `work.idle_before_away_minutes` | `10` | No input up to this long before the display goes off counts as away; match your display-sleep timeout, `0` to turn off |
+| `work.brief_visit_minutes` | `2` | Activity up to this long between two breaks is not work; `0` to turn off |
 | `work.day_start_hour` | `4` | Local hour a logical day begins; `0` for calendar days |
 | `work.day_boundary` | `"session"` | `"session"`: a session stays on the day it started. `"strict"`: the boundary cuts it, so each day gets only its own hours |
 | `storage.db_path` | data dir | Where samples live; point at iCloud/Dropbox for loose sync |
@@ -244,6 +252,12 @@ labels. Nothing leaves your machine.
   open session's end and active time move back by up to that long after you
   leave. If your display sleeps later than the setting, the stretch stays
   present.
+- Work done in two minutes or less between two breaks — a quick reply — is not
+  counted (`work.brief_visit_minutes`); nothing in the signals separates it from
+  a touch in passing.
+- `report` / `today` read only the window they are given, so in the first and
+  last ten minutes of a logical day they can differ from `timeline` by one such
+  touch (at most two minutes) or one no-input stretch (at most ten).
 - No input for under ten minutes cannot be told apart from having left: locking
   the screen and walking off right after reading counts that reading as absence.
 - Placing the DB in an iCloud/Dropbox folder assumes a single writer (one

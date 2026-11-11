@@ -46,6 +46,7 @@ func paramsOf(cfg config.Config) aggregate.Params {
 		DayStartHour:   cfg.DayStartHour,
 		DayBoundary:    aggregate.DayBoundary(cfg.DayBoundary),
 		IdleBeforeAway: time.Duration(cfg.IdleBeforeAwayMinutes) * time.Minute,
+		BriefVisit:     time.Duration(cfg.BriefVisitMinutes) * time.Minute,
 	}
 }
 
@@ -56,6 +57,15 @@ func idleBeforeAwayGloss(minutes int) string {
 		return "off (no input before the display goes off stays present)"
 	}
 	return fmt.Sprintf("%dm (no input up to this long before the display goes off counts as away)", minutes)
+}
+
+// briefVisitGloss says what the brief_visit setting does to the work log.
+func briefVisitGloss(minutes, breakMinutes int) string {
+	if minutes <= 0 {
+		return "off (any activity between two breaks is work)"
+	}
+	return fmt.Sprintf("%dm (activity up to this long between two away spans of %dm or more is not work)",
+		minutes, breakMinutes)
 }
 
 // dayBoundaryGloss explains a day_boundary value in one clause, so `doctor`
@@ -131,15 +141,25 @@ func lookback(cfg config.Config) time.Duration {
 // says so on stderr, so a `--json` consumer's stdout stays a document.
 const maxLookback = 14 * 24 * time.Hour
 
-// samplesForWindow reads [since-lookback, until] and keeps widening the read
-// until the stream begins after a break, so the sessions inside the window do
-// not depend on where the read happened to start.
+// samplesForWindow reads [since-lookback, until+lookback] and keeps widening the
+// read backwards until the stream begins after a break, so the sessions inside
+// the window do not depend on where the read happened to start — or stop.
+//
+// The read runs past `until` because a session is filed, whole, under the day it
+// started in: stopping at `until` cut a session still running there, so a day's
+// end and active time depended on the `--until` it was asked with (measured: one
+// day read 8.9 h asked for alone and 18.6 h asked for with the two days after).
+// It also gives the rules that look at what follows a span (ADR 0003, 0004) the
+// away after it. `lookback` is long enough ahead for the same reason it is
+// behind: a session is cut at 48 h and the absence that ends one is a
+// session_gap, so any session begun before `until` ends inside it. With `until`
+// at now there is nothing ahead to read and nothing changes.
 func samplesForWindow(st sampleQuerier, since, until time.Time,
 	cfg config.Config, loc *time.Location) ([]activity.Sample, bool, error) {
 	p := paramsOf(cfg)
 	back := lookback(cfg)
 	for {
-		samples, err := st.Query(since.Add(-back), until)
+		samples, err := st.Query(since.Add(-back), until.Add(lookback(cfg)))
 		if err != nil {
 			return nil, false, err
 		}
@@ -506,6 +526,7 @@ func runDoctor(args []string) error {
 		cfg.BreakMinutes, cfg.SessionGapMinutes, cfg.DayStartHour)
 	fmt.Printf("DayBoundary: %s (%s)\n", cfg.DayBoundary, dayBoundaryGloss(cfg.DayBoundary))
 	fmt.Printf("IdleBeforeAway: %s\n", idleBeforeAwayGloss(cfg.IdleBeforeAwayMinutes))
+	fmt.Printf("BriefVisit:  %s\n", briefVisitGloss(cfg.BriefVisitMinutes, cfg.BreakMinutes))
 
 	fmt.Print("Signals:     ")
 	snap, serr := signal.NewSampler().Snapshot()

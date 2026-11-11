@@ -39,7 +39,8 @@ core/
                         DayTimeline (work markers, breaks, blocks);
                         Params.DayBoundary picks where a session is cut;
                         Segments is the ONE attribution every aggregation reads
-                        (idle before a lasting away -> away, ADR 0003)
+                        (idle before a lasting away -> away, ADR 0003; a
+                        brief visit between two breaks -> away, ADR 0004)
   config/               minimal hand-rolled TOML (no external dep)
   platform/             config/data paths + launchd LaunchAgent scheduler
 ```
@@ -95,6 +96,11 @@ core/
   disagree. The exception is deliberate: `StartsAfterABreak` reads
   `rawSegments`, because the head of a read truncates a present, and a truncated
   present re-counted as away can fuse into a session gap that is not there.
+- **`samplesForWindow` reads past `until` as well as before `since`.** A session
+  is filed whole under the day it began, so a read that stopped at `until` cut a
+  session still running there and made a day's figures depend on the `--until`
+  asked for. The rules that look at the away *after* a span need that read too.
+  `report` / `today` are per-second totals and still read exactly their window.
 - **The idle-before-away rule is not corrected at the edges of a read.** Padding
   the read and clipping would change `report` / `today` output even with the
   rule off. The residual (at most the limit, only when the change to away falls
@@ -108,7 +114,9 @@ core/
   and (ADR 0003) the idle before an away is re-counted once that away has lasted
   a minute: the session's `end` and active time move back by up to
   `idle_before_away`, and a session made only of a display lighting with no
-  input is withdrawn. Nothing else may move a boundary retroactively — the menu
+  input is withdrawn. Likewise (ADR 0004) a session made only of activity of at
+  most `brief_visit` is withdrawn, and an open session's `end` can move back to
+  before such a visit, once the away after it reaches `break_minutes`. Nothing else may move a boundary retroactively — the menu
   bar displays that start time. Under
   `day_boundary = strict` the day boundary opens a *new* session at a known
   instant; that is a new start, not a moved one.

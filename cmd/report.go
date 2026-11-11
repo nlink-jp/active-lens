@@ -109,6 +109,7 @@ type jsonTimeline struct {
 	BreakThresholdSeconds int64             `json:"break_threshold_seconds"`
 	SessionGapSeconds     int64             `json:"session_gap_seconds"`
 	IdleBeforeAwaySeconds int64             `json:"idle_before_away_seconds"` // 0 = rule off (ADR 0003)
+	BriefVisitSeconds     int64             `json:"brief_visit_seconds"`      // 0 = rule off (ADR 0004)
 	DayStartHour          int               `json:"day_start_hour"`
 	DayBoundary           string            `json:"day_boundary"` // "session" | "strict"
 	Days                  []jsonDayTimeline `json:"days"`
@@ -135,6 +136,7 @@ func buildTimeline(samples []activity.Sample, since, until time.Time, p aggregat
 		BreakThresholdSeconds: int64(p.BreakThreshold.Seconds()),
 		SessionGapSeconds:     int64(p.SessionGap.Seconds()),
 		IdleBeforeAwaySeconds: int64(p.IdleBeforeAway.Seconds()),
+		BriefVisitSeconds:     int64(p.BriefVisit.Seconds()),
 		DayStartHour:          p.DayStartHour,
 		DayBoundary:           string(p.Boundary()),
 		Days:                  make([]jsonDayTimeline, 0, len(dates)),

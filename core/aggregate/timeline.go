@@ -37,6 +37,11 @@ type Params struct {
 	// display then goes off and stays off, is counted as away from the moment
 	// input stopped. Zero disables the rule. See docs/{en,ja}/adr/0003.
 	IdleBeforeAway time.Duration
+	// BriefVisit is the longest run of activity that, lying between two away
+	// spans each at least BreakThreshold long, is counted as away: a touch in
+	// the middle of an absence, not work. Zero disables the rule. See
+	// docs/{en,ja}/adr/0004.
+	BriefVisit time.Duration
 }
 
 // idleConfirm is how long the away that follows must last before the no-input
@@ -120,7 +125,57 @@ func StartsAfterABreak(samples []activity.Sample, p Params, loc *time.Location) 
 // all derive from this list, so they cannot disagree about a given instant
 // within one stream.
 func Segments(samples []activity.Sample, p Params, loc *time.Location) []Segment {
-	return reattributeIdleBeforeAway(rawSegments(samples, p.MaxGap, loc), p.IdleBeforeAway, idleConfirm)
+	segs := reattributeIdleBeforeAway(rawSegments(samples, p.MaxGap, loc), p.IdleBeforeAway, idleConfirm)
+	// After the idle rule, so that a visit is measured by how long the machine
+	// was actually touched, not by the idle that trailed it.
+	return dropBriefVisits(segs, p.BriefVisit, p.BreakThreshold)
+}
+
+// dropBriefVisits turns a run of activity into away when the run is at most
+// brief long and the away spans directly before and after it each last at least
+// breakThreshold: the break went on, and someone touched the machine in the
+// middle of it. A run is a maximal sequence of contiguous non-away segments,
+// measured from its first segment's start to its last one's end. Runs at the
+// head or tail of the list have an unseen side and are left alone. Every
+// decision is taken on the list as given, so one rewrite never enables the
+// next. Pure; brief <= 0 or breakThreshold <= 0 returns segs unchanged — with
+// no break length there is no "between two breaks", and a zero would let an
+// away of any length qualify.
+func dropBriefVisits(segs []Segment, brief, breakThreshold time.Duration) []Segment {
+	if brief <= 0 || breakThreshold <= 0 || len(segs) < 3 {
+		return segs
+	}
+	out := make([]Segment, len(segs))
+	copy(out, segs)
+	changed := false
+	for i := 0; i < len(segs); {
+		if segs[i].State == activity.Away {
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(segs) && segs[j].State != activity.Away && segs[j-1].End.Equal(segs[j].Start) {
+			j++
+		}
+		// [i, j) is a run; j stops at an away, a hole, or the end of the list.
+		if i > 0 && j < len(segs) {
+			before, after := segs[i-1], segs[j]
+			if before.State == activity.Away && before.End.Equal(segs[i].Start) &&
+				after.State == activity.Away && segs[j-1].End.Equal(after.Start) &&
+				before.Duration() >= breakThreshold && after.Duration() >= breakThreshold &&
+				segs[j-1].End.Sub(segs[i].Start) <= brief {
+				for k := i; k < j; k++ {
+					out[k].State = activity.Away
+				}
+				changed = true
+			}
+		}
+		i = j
+	}
+	if !changed {
+		return segs
+	}
+	return mergeSegments(out)
 }
 
 // reattributeIdleBeforeAway turns a present segment into away when it is at
