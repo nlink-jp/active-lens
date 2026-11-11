@@ -6,6 +6,8 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-11
+
 ### Changed
 
 - **No input just before an absence now counts as the absence.** Leaving the
@@ -169,7 +171,9 @@ Packaging-only release; no change to the binary's behaviour.
 - `config.toml` for sampling interval, active threshold, gap cap, and DB path
   (minimal hand-rolled parser, no external dependency).
 
-[Unreleased]: https://github.com/nlink-jp/active-lens/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nlink-jp/active-lens/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/nlink-jp/active-lens/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/nlink-jp/active-lens/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/nlink-jp/active-lens/compare/v0.2.1...v0.3.0
 [0.2.0]: https://github.com/nlink-jp/active-lens/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nlink-jp/active-lens/releases/tag/v0.1.0
