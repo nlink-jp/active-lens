@@ -109,7 +109,7 @@ func TestBuildReport(t *testing.T) {
 		{TS: base.Add(30 * time.Second), State: activity.Present},
 		{TS: base.Add(45 * time.Second), State: activity.Present},
 	}
-	rep := buildReport(samples, base, base.Add(time.Minute), 45*time.Second, loc, 4)
+	rep := buildReport(samples, base, base.Add(time.Minute), aggregate.Params{MaxGap: 45 * time.Second, DayStartHour: 4}, loc)
 	if rep.SampleCount != 4 {
 		t.Errorf("SampleCount = %d, want 4", rep.SampleCount)
 	}
@@ -223,7 +223,7 @@ func TestPrintReportHuman(t *testing.T) {
 		{TS: base, State: activity.Operating},
 		{TS: base.Add(time.Hour), State: activity.Operating},
 	}
-	rep := buildReport(samples, base, base.Add(2*time.Hour), 2*time.Hour, loc, 4)
+	rep := buildReport(samples, base, base.Add(2*time.Hour), aggregate.Params{MaxGap: 2 * time.Hour, DayStartHour: 4}, loc)
 	var buf bytes.Buffer
 	printReportHuman(&buf, rep)
 	out := buf.String()
@@ -526,5 +526,95 @@ func TestEmitStatusJSON_PublishesTheWorkDayRule(t *testing.T) {
 	}
 	if got.DayStartHour != 5 || got.DayBoundary != "strict" {
 		t.Errorf("status = %+v, want day_start_hour 5 and day_boundary strict", got)
+	}
+}
+
+// leaveAndReturn: 30m of input, no input until the display sleeps, a 20m
+// absence, then 10m of input — sampled every 15s from base.
+func leaveAndReturn(base time.Time) []activity.Sample {
+	var out []activity.Sample
+	at := base
+	for _, part := range []struct {
+		d  time.Duration
+		st activity.State
+	}{
+		{30 * time.Minute, activity.Operating},
+		{570 * time.Second, activity.Present},
+		{20 * time.Minute, activity.Away},
+		{10 * time.Minute, activity.Operating},
+	} {
+		for t := at; t.Before(at.Add(part.d)); t = t.Add(15 * time.Second) {
+			out = append(out, activity.Sample{TS: t, State: part.st})
+		}
+		at = at.Add(part.d)
+	}
+	return out
+}
+
+// The config value reaches the derivation, and `report` and `timeline` — which
+// used to attribute separately — give the same answer about the idle.
+func TestIdleBeforeAway_ReportAndTimelineAgree(t *testing.T) {
+	loc := time.UTC
+	base := time.Date(2026, 7, 9, 10, 0, 0, 0, loc)
+	samples := leaveAndReturn(base)
+	since, until := base.Add(-time.Hour), base.Add(3*time.Hour)
+
+	for _, minutes := range []int{0, 10} {
+		cfg := config.Defaults("/data")
+		cfg.IdleBeforeAwayMinutes = minutes
+		p := paramsOf(cfg)
+
+		rep := buildReport(samples, since, until, p, loc)
+		tl := buildTimeline(samples, since, until, p, loc)
+		if tl.IdleBeforeAwaySeconds != int64(minutes*60) {
+			t.Errorf("minutes=%d: timeline publishes idle_before_away_seconds=%d", minutes, tl.IdleBeforeAwaySeconds)
+		}
+		var day jsonDayTimeline
+		for _, d := range tl.Days {
+			if d.HasWork {
+				day = d
+			}
+		}
+		wantPresent := int64(570)
+		if minutes > 0 {
+			wantPresent = 0
+		}
+		if rep.Total.PresentSeconds != wantPresent || day.PresentSeconds != wantPresent {
+			t.Errorf("minutes=%d: present report=%d timeline=%d, want %d",
+				minutes, rep.Total.PresentSeconds, day.PresentSeconds, wantPresent)
+		}
+		if rep.Total.OperatingSeconds != day.OperatingSeconds {
+			t.Errorf("minutes=%d: operating report=%d timeline=%d", minutes, rep.Total.OperatingSeconds, day.OperatingSeconds)
+		}
+	}
+}
+
+// At the live edge the idle is re-counted only once the away has lasted a
+// minute: until then the session still ends where the display went off.
+func TestBuildNow_IdleIsRecountedOnceTheAwayIsConfirmed(t *testing.T) {
+	loc := time.UTC
+	base := time.Date(2026, 7, 9, 10, 0, 0, 0, loc)
+	cfg := config.Defaults("/data")
+	p := paramsOf(cfg)
+	inputStopped := base.Add(30 * time.Minute)
+	displayOff := inputStopped.Add(570 * time.Second)
+	all := leaveAndReturn(base)
+
+	upTo := func(now time.Time) []activity.Sample {
+		var out []activity.Sample
+		for _, s := range all {
+			if !s.TS.After(now) {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	early := displayOff.Add(30 * time.Second)
+	if n := buildNow(upTo(early), early, time.Minute, p, loc); n.Session == nil || n.Session.EndUnix != displayOff.Unix() {
+		t.Errorf("30s into the away the session should still end at display-off: %+v", n.Session)
+	}
+	late := displayOff.Add(2 * time.Minute)
+	if n := buildNow(upTo(late), late, time.Minute, p, loc); n.Session == nil || n.Session.EndUnix != inputStopped.Unix() {
+		t.Errorf("2m into the away the session should end where input stopped: %+v", n.Session)
 	}
 }

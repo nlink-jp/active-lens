@@ -33,6 +33,11 @@ type Config struct {
 	// before it is filed under the previous day, so an evening that runs past
 	// midnight stays on the day it started.
 	DayStartHour int
+	// IdleBeforeAwayMinutes is the longest no-input span (in minutes) that is
+	// counted as away when the display then goes off and stays off: the absence
+	// began when input stopped, not when the display timer fired. Match it to
+	// the display-sleep timeout. Zero disables the rule. See ADR 0003.
+	IdleBeforeAwayMinutes int
 	// DayBoundary selects what a logical day boundary does to a session in
 	// progress: DayBoundarySession files the session whole under the day it
 	// started in, DayBoundaryStrict ends it at the boundary and opens a new one
@@ -63,6 +68,7 @@ func Defaults(dataDir string) Config {
 		MaxGapSeconds:          interval * 3,
 		BreakMinutes:           10,
 		SessionGapMinutes:      240,
+		IdleBeforeAwayMinutes:  10,
 		DayStartHour:           4,
 		DayBoundary:            DayBoundarySession,
 		DBPath:                 filepath.Join(dataDir, "activity.db"),
@@ -128,6 +134,13 @@ func apply(cfg Config, data []byte) (Config, error) {
 			return cfg, fmt.Errorf("work.session_gap_minutes: want positive integer, got %q", v)
 		}
 		cfg.SessionGapMinutes = n
+	}
+	if v, ok := kv["work.idle_before_away_minutes"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return cfg, fmt.Errorf("work.idle_before_away_minutes: want non-negative integer, got %q", v)
+		}
+		cfg.IdleBeforeAwayMinutes = n
 	}
 	if v, ok := kv["work.day_start_hour"]; ok {
 		n, err := strconv.Atoi(v)

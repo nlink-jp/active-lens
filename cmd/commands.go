@@ -45,7 +45,17 @@ func paramsOf(cfg config.Config) aggregate.Params {
 		SessionGap:     time.Duration(cfg.SessionGapMinutes) * time.Minute,
 		DayStartHour:   cfg.DayStartHour,
 		DayBoundary:    aggregate.DayBoundary(cfg.DayBoundary),
+		IdleBeforeAway: time.Duration(cfg.IdleBeforeAwayMinutes) * time.Minute,
 	}
+}
+
+// idleBeforeAwayGloss says what the idle_before_away setting does to the
+// numbers, since "10m" alone does not tell a reader that active time moved.
+func idleBeforeAwayGloss(minutes int) string {
+	if minutes <= 0 {
+		return "off (no input before the display goes off stays present)"
+	}
+	return fmt.Sprintf("%dm (no input up to this long before the display goes off counts as away)", minutes)
 }
 
 // dayBoundaryGloss explains a day_boundary value in one clause, so `doctor`
@@ -299,8 +309,7 @@ func emitReport(w io.Writer, cfg config.Config, since, until time.Time, loc *tim
 	if err != nil {
 		return err
 	}
-	maxGap := time.Duration(cfg.MaxGapSeconds) * time.Second
-	rep := buildReport(samples, since, until, maxGap, loc, cfg.DayStartHour)
+	rep := buildReport(samples, since, until, paramsOf(cfg), loc)
 
 	if asJSON {
 		enc := json.NewEncoder(w)
@@ -496,6 +505,7 @@ func runDoctor(args []string) error {
 	fmt.Printf("Break:       %dm\nSessionGap:  %dm\nDayStart:    %02d:00\n",
 		cfg.BreakMinutes, cfg.SessionGapMinutes, cfg.DayStartHour)
 	fmt.Printf("DayBoundary: %s (%s)\n", cfg.DayBoundary, dayBoundaryGloss(cfg.DayBoundary))
+	fmt.Printf("IdleBeforeAway: %s\n", idleBeforeAwayGloss(cfg.IdleBeforeAwayMinutes))
 
 	fmt.Print("Signals:     ")
 	snap, serr := signal.NewSampler().Snapshot()

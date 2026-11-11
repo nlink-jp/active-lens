@@ -46,32 +46,12 @@ type DayTotals struct {
 	Totals Totals
 }
 
-// walkSegments replays the samples as attributed [start,end) segments, split at
-// local hour boundaries, invoking fn for each. samples need not be pre-sorted.
-func walkSegments(samples []activity.Sample, maxGap time.Duration, loc *time.Location, fn func(start time.Time, dur time.Duration, st activity.State)) {
-	if len(samples) < 2 {
-		return
-	}
-	sorted := make([]activity.Sample, len(samples))
-	copy(sorted, samples)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].TS.Before(sorted[j].TS) })
-
-	for i := 0; i+1 < len(sorted); i++ {
-		a, b := sorted[i], sorted[i+1]
-		delta := b.TS.Sub(a.TS)
-		if delta <= 0 {
-			continue
-		}
-		eff := delta
-		if maxGap > 0 && eff > maxGap {
-			eff = maxGap
-		}
-		mid := a.TS.Add(eff)
-		emitSplit(a.TS, mid, a.State, loc, fn)
-		if delta > eff {
-			// The daemon was not sampling here: treat the gap as system sleep.
-			emitSplit(mid, b.TS, activity.Away, loc, fn)
-		}
+// walkSegments replays the attributed segments — the same list the work log is
+// derived from (see Segments) — split at local hour boundaries, invoking fn for
+// each piece. samples need not be pre-sorted.
+func walkSegments(samples []activity.Sample, p Params, loc *time.Location, fn func(start time.Time, dur time.Duration, st activity.State)) {
+	for _, seg := range Segments(samples, p, loc) {
+		emitSplit(seg.Start, seg.End, seg.State, loc, fn)
 	}
 }
 
@@ -97,9 +77,9 @@ func nextHour(t time.Time) time.Time {
 }
 
 // Range returns the grand totals across all samples.
-func Range(samples []activity.Sample, maxGap time.Duration, loc *time.Location) Totals {
+func Range(samples []activity.Sample, p Params, loc *time.Location) Totals {
 	var tot Totals
-	walkSegments(samples, maxGap, loc, func(_ time.Time, d time.Duration, st activity.State) {
+	walkSegments(samples, p, loc, func(_ time.Time, d time.Duration, st activity.State) {
 		tot.add(st, d)
 	})
 	return tot
@@ -112,10 +92,10 @@ func Range(samples []activity.Sample, maxGap time.Duration, loc *time.Location) 
 //
 // Intervals are already split at hour boundaries and dayStartHour is a whole
 // hour, so no piece straddles a boundary and only the bucket key changes.
-func ByDay(samples []activity.Sample, maxGap time.Duration, loc *time.Location, dayStartHour int) []DayTotals {
+func ByDay(samples []activity.Sample, p Params, loc *time.Location) []DayTotals {
 	byKey := map[string]*Totals{}
-	walkSegments(samples, maxGap, loc, func(start time.Time, d time.Duration, st activity.State) {
-		key := LogicalDate(start, dayStartHour)
+	walkSegments(samples, p, loc, func(start time.Time, d time.Duration, st activity.State) {
+		key := LogicalDate(start, p.DayStartHour)
 		t := byKey[key]
 		if t == nil {
 			t = &Totals{}
@@ -133,9 +113,9 @@ func ByDay(samples []activity.Sample, maxGap time.Duration, loc *time.Location, 
 
 // ByHourOfDay folds every day in the range into 24 hour-of-day buckets (index
 // 0..23 in the aggregation location) — the shape a time-of-day heatmap wants.
-func ByHourOfDay(samples []activity.Sample, maxGap time.Duration, loc *time.Location) [24]Totals {
+func ByHourOfDay(samples []activity.Sample, p Params, loc *time.Location) [24]Totals {
 	var buckets [24]Totals
-	walkSegments(samples, maxGap, loc, func(start time.Time, d time.Duration, st activity.State) {
+	walkSegments(samples, p, loc, func(start time.Time, d time.Duration, st activity.State) {
 		buckets[start.Hour()].add(st, d)
 	})
 	return buckets

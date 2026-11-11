@@ -134,3 +134,29 @@ func TestApply_DayBoundaryRejectsUnknownSpelling(t *testing.T) {
 		}
 	}
 }
+
+func TestIdleBeforeAway(t *testing.T) {
+	if c := Defaults("/data"); c.IdleBeforeAwayMinutes != 10 {
+		t.Errorf("default IdleBeforeAwayMinutes = %d, want 10", c.IdleBeforeAwayMinutes)
+	}
+	// 0 turns the rule off; a quoted number reads as a number, as every key does.
+	for in, want := range map[string]int{
+		"[work]\nidle_before_away_minutes = 0\n":      0,
+		"[work]\nidle_before_away_minutes = 2\n":      2,
+		"[work]\nidle_before_away_minutes = \"15\"\n": 15,
+	} {
+		c, err := apply(Defaults("/data"), []byte(in))
+		if err != nil || c.IdleBeforeAwayMinutes != want {
+			t.Errorf("apply(%q) = %d, %v; want %d", in, c.IdleBeforeAwayMinutes, err, want)
+		}
+	}
+	for _, bad := range []string{
+		"[work]\nidle_before_away_minutes = -1\n",
+		"[work]\nidle_before_away_minutes = soon\n",
+		"[work]\nidle_before_away_minutes = 1.5\n",
+	} {
+		if _, err := apply(Defaults("/data"), []byte(bad)); err == nil {
+			t.Errorf("apply(%q) = nil error, want error", bad)
+		}
+	}
+}

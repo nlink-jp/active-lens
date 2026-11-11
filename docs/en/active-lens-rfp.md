@@ -170,7 +170,8 @@ Reason: a local measure/aggregate/visualize utility that rides the same
 - Auto-start via launchd LaunchAgent
 - The present/away boundary depends on the "display sleep timeout" setting: for
   the first few minutes after leaving, before the display auto-sleeps, time is
-  temporarily misclassified as "present" (documented limitation)
+  temporarily misclassified as "present" (documented limitation; resolved at
+  aggregation time by ADR 0003 — the samples are still recorded as present)
 - Being input-based, "watching a video with no input" is *present*; after full
   inactivity and display-off it is *away*. This is a valid definition of
   "operating time" but is documented explicitly

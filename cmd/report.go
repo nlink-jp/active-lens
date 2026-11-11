@@ -108,6 +108,7 @@ type jsonTimeline struct {
 	SampleCount           int               `json:"sample_count"`
 	BreakThresholdSeconds int64             `json:"break_threshold_seconds"`
 	SessionGapSeconds     int64             `json:"session_gap_seconds"`
+	IdleBeforeAwaySeconds int64             `json:"idle_before_away_seconds"` // 0 = rule off (ADR 0003)
 	DayStartHour          int               `json:"day_start_hour"`
 	DayBoundary           string            `json:"day_boundary"` // "session" | "strict"
 	Days                  []jsonDayTimeline `json:"days"`
@@ -133,6 +134,7 @@ func buildTimeline(samples []activity.Sample, since, until time.Time, p aggregat
 		SampleCount:           countInRange(samples, since, until),
 		BreakThresholdSeconds: int64(p.BreakThreshold.Seconds()),
 		SessionGapSeconds:     int64(p.SessionGap.Seconds()),
+		IdleBeforeAwaySeconds: int64(p.IdleBeforeAway.Seconds()),
 		DayStartHour:          p.DayStartHour,
 		DayBoundary:           string(p.Boundary()),
 		Days:                  make([]jsonDayTimeline, 0, len(dates)),
@@ -353,9 +355,11 @@ type jsonNow struct {
 // buildNow derives the now-session from the sample window. Pure: `now` and the
 // staleness cutoff are injected so the derivation is fully testable.
 //
-// A session's Start is never provisional and an open session's End is by
-// definition its last active moment, so elapsed time only ever flips `open`
-// from true to false. No boundary moves retroactively.
+// The Start of a session that had input is never provisional and an open
+// session's End is its last active moment. Elapsed time flips `open` from true
+// to false, and (ADR 0003) once an away has lasted a minute the idle before it
+// is re-counted: End moves back to where input stopped, and a session that was
+// only a display lighting with no input is withdrawn.
 func buildNow(samples []activity.Sample, now time.Time, staleAfter time.Duration, p aggregate.Params, loc *time.Location) jsonNow {
 	out := jsonNow{Day: jsonNowDay{Date: aggregate.LogicalDate(now.In(loc), p.DayStartHour)}}
 
@@ -479,10 +483,11 @@ func toJSONTotals(t aggregate.Totals) jsonTotals {
 
 // buildReport aggregates samples over [since, until] into the report payload.
 // Pure: no I/O, deterministic for given inputs. Day buckets are logical days.
-func buildReport(samples []activity.Sample, since, until time.Time, maxGap time.Duration, loc *time.Location, dayStartHour int) jsonReport {
-	total := aggregate.Range(samples, maxGap, loc)
-	days := aggregate.ByDay(samples, maxGap, loc, dayStartHour)
-	hod := aggregate.ByHourOfDay(samples, maxGap, loc)
+func buildReport(samples []activity.Sample, since, until time.Time, p aggregate.Params, loc *time.Location) jsonReport {
+	dayStartHour := p.DayStartHour
+	total := aggregate.Range(samples, p, loc)
+	days := aggregate.ByDay(samples, p, loc)
+	hod := aggregate.ByHourOfDay(samples, p, loc)
 
 	rep := jsonReport{
 		Since:       aggregate.LogicalDate(since.In(loc), dayStartHour),

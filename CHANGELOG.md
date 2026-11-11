@@ -4,6 +4,35 @@ All notable changes to active-lens are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **No input just before an absence now counts as the absence.** Leaving the
+  desk does not turn the display off, so the stretch between the last input and
+  the display-sleep timer firing was recorded as *present* and counted as active
+  time — the limitation RFP §7 documented. A present of at most
+  `work.idle_before_away_minutes` (new, default 10) that is directly followed by
+  an away lasting at least a minute is now aggregated as away. A longer one (a
+  video or a call holding the display awake) and one after which the display
+  came back within a minute are left alone. Raw samples are untouched, so
+  **history re-derives and its numbers change**: on the record this was designed
+  against (125 days, display sleep at 10 minutes) present fell by 21% and active
+  time by 8.5%; breaks begin and working days end about ten minutes earlier; and
+  more absences reach the break threshold. Set
+  `idle_before_away_minutes = 0` for the previous numbers. See
+  [ADR 0003](docs/en/adr/0003-idle-before-away.md).
+- At the live edge, `now`'s open session has its `end` and active time move back
+  by up to that limit once the display has been off for a minute, and a session
+  that consisted only of a display lighting with no input is withdrawn.
+- `report` / `today` and `timeline` / `now` derive from one segment list
+  (`aggregate.Segments`) instead of two copies of the same attribution.
+
+### Added
+
+- `timeline --json` publishes `idle_before_away_seconds` in its header (0 when
+  the rule is off). `doctor` prints the resolved setting.
+
 ## [0.3.1] - 2026-09-21
 
 ### Fixed

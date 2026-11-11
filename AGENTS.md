@@ -37,7 +37,9 @@ core/
   aggregate/            PURE interval attribution -> Totals / ByDay / ByHourOfDay;
                         timeline.go = Segments -> Sessions -> per-logical-day
                         DayTimeline (work markers, breaks, blocks);
-                        Params.DayBoundary picks where a session is cut
+                        Params.DayBoundary picks where a session is cut;
+                        Segments is the ONE attribution every aggregation reads
+                        (idle before a lasting away -> away, ADR 0003)
   config/               minimal hand-rolled TOML (no external dep)
   platform/             config/data paths + launchd LaunchAgent scheduler
 ```
@@ -87,13 +89,27 @@ core/
     it takes. `cmd.TestSamplesForWindowDoNotDependOnWhereTheReadBegins` sweeps
     the phases, because which ones bite depends on where the read lands in the
     day.
+- **Every aggregation reads `aggregate.Segments`.** Totals (`Range` / `ByDay` /
+  `ByHourOfDay`) and the work log (`Sessions` / `Timeline`) used to attribute
+  separately; a rule added to one would have made `report` and `timeline`
+  disagree. The exception is deliberate: `StartsAfterABreak` reads
+  `rawSegments`, because the head of a read truncates a present, and a truncated
+  present re-counted as away can fuse into a session gap that is not there.
+- **The idle-before-away rule is not corrected at the edges of a read.** Padding
+  the read and clipping would change `report` / `today` output even with the
+  rule off. The residual (at most the limit, only when the change to away falls
+  across the read's edge) is accepted — ADR 0003 §3.3.
 - **`present` never times out.** `Classify` returns `present` for as long as the
   display is on and the machine unlocked, so a Mac held awake emits an activity
   run that never ends on its own. That is why `Sessions()` has a backstop: under
   `day_boundary = session` a session may cross at most one logical day boundary.
-- **A now-session's `start` is never provisional.** At the live edge only `open`
-  can change, once an absence passes `session_gap`. Nothing may move a boundary
-  retroactively — the menu bar displays that start time. Under
+- **A now-session's `start` is never provisional — for a session that had
+  input.** At the live edge `open` changes once an absence passes `session_gap`,
+  and (ADR 0003) the idle before an away is re-counted once that away has lasted
+  a minute: the session's `end` and active time move back by up to
+  `idle_before_away`, and a session made only of a display lighting with no
+  input is withdrawn. Nothing else may move a boundary retroactively — the menu
+  bar displays that start time. Under
   `day_boundary = strict` the day boundary opens a *new* session at a known
   instant; that is a new start, not a moved one.
 - **cgo is confined to `core/signal`.** SQLite is pure-Go on purpose; keep it that

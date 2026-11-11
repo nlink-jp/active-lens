@@ -43,7 +43,7 @@ func TestSegments_Merge(t *testing.T) {
 		samp("2026-07-09 10:01:00", activity.Operating),
 		samp("2026-07-09 10:01:15", activity.Operating),
 	}
-	segs := Segments(samples, 45*time.Second, utc)
+	segs := Segments(samples, Params{MaxGap: 45 * time.Second}, utc)
 	if len(segs) != 3 {
 		t.Fatalf("got %d segments, want 3: %+v", len(segs), segs)
 	}
@@ -63,7 +63,7 @@ func TestSegments_SleepGapBecomesAwaySegment(t *testing.T) {
 		samp("2026-07-09 10:00:00", activity.Operating),
 		samp("2026-07-09 12:00:00", activity.Operating),
 	}
-	segs := Segments(samples, 45*time.Second, utc)
+	segs := Segments(samples, Params{MaxGap: 45 * time.Second}, utc)
 	// operating 45s, then away for the rest of the 2h gap.
 	if len(segs) != 2 {
 		t.Fatalf("got %d segments, want 2", len(segs))
@@ -480,7 +480,7 @@ func TestTimeline_StrictDayTotalsMatchReportDayTotals(t *testing.T) {
 	for _, d := range Timeline(samples, params, utc) {
 		byDate[d.Date] = d.ActiveSeconds()
 	}
-	for _, d := range ByDay(samples, params.MaxGap, utc, params.DayStartHour) {
+	for _, d := range ByDay(samples, params, utc) {
 		want := int((d.Totals.Operating + d.Totals.Present).Seconds())
 		if got := byDate[d.Date]; got != want {
 			t.Errorf("%s: timeline active %ds, report active %ds", d.Date, got, want)
@@ -544,7 +544,7 @@ func TestSessions_CutsWhenTheBoundaryFallsBetweenSegments(t *testing.T) {
 	for _, d := range Timeline(samples, params, utc) {
 		byDate[d.Date] = d.ActiveSeconds()
 	}
-	for _, d := range ByDay(samples, params.MaxGap, utc, params.DayStartHour) {
+	for _, d := range ByDay(samples, params, utc) {
 		want := int((d.Totals.Operating + d.Totals.Present).Seconds())
 		if got := byDate[d.Date]; got != want {
 			t.Errorf("%s: timeline %ds, report %ds", d.Date, got, want)

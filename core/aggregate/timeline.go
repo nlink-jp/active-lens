@@ -33,7 +33,17 @@ type Params struct {
 	// DayBoundary selects what a day boundary does to a session in progress.
 	// The zero value is BoundarySession, the behaviour of ADR 0001.
 	DayBoundary DayBoundary
+	// IdleBeforeAway is the longest no-input (present) span that, when the
+	// display then goes off and stays off, is counted as away from the moment
+	// input stopped. Zero disables the rule. See docs/{en,ja}/adr/0003.
+	IdleBeforeAway time.Duration
 }
+
+// idleConfirm is how long the away that follows must last before the no-input
+// span ahead of it is counted as away. A display that slept on someone reading
+// is woken within seconds; measured, 68 of 618 timer-driven sleeps were followed
+// by under a minute of away. Deliberately not a setting (ADR 0003 §2).
+const idleConfirm = 60 * time.Second
 
 // DayBoundary is what a logical day boundary does to a session running across
 // it. See docs/{en,ja}/adr/0002.
@@ -85,7 +95,14 @@ func (p Params) cutAfter(t time.Time) time.Time {
 // it takes, which is why the callers widen the read until this returns true
 // (`cmd.samplesForWindow`).
 func StartsAfterABreak(samples []activity.Sample, p Params, loc *time.Location) bool {
-	for _, seg := range Segments(samples, p.MaxGap, loc) {
+	// Judged on the segments as recorded, not as re-attributed. The head of a
+	// read truncates whatever span it lands in, so a long present can look short
+	// enough to be counted as away and fuse with the away after it into an
+	// absence that is not there — a false anchor, and the day-shifted chain this
+	// function exists to prevent. Re-attribution only ever lengthens an away, so
+	// an absence found here is still one afterwards; the reverse only reads
+	// further back.
+	for _, seg := range rawSegments(samples, p.MaxGap, loc) {
 		if isActive(seg.State) {
 			return false
 		}
@@ -97,11 +114,57 @@ func StartsAfterABreak(samples []activity.Sample, p Params, loc *time.Location) 
 	return true
 }
 
-// Segments collapses the sample stream into contiguous same-state spans (times
-// in loc). It uses the same interval attribution as the totals aggregation —
-// each gap up to maxGap is credited to the earlier sample's state, and any
-// excess is a system-sleep "away" span — then merges adjacent same-state pieces.
-func Segments(samples []activity.Sample, maxGap time.Duration, loc *time.Location) []Segment {
+// Segments is the one attribution every aggregation reads: the sample stream as
+// contiguous same-state spans (times in loc), with the no-input span ahead of a
+// lasting away counted as away (ADR 0003). Totals, sessions and the now-session
+// all derive from this list, so they cannot disagree about a given instant
+// within one stream.
+func Segments(samples []activity.Sample, p Params, loc *time.Location) []Segment {
+	return reattributeIdleBeforeAway(rawSegments(samples, p.MaxGap, loc), p.IdleBeforeAway, idleConfirm)
+}
+
+// reattributeIdleBeforeAway turns a present segment into away when it is at
+// most limit long and is directly followed by an away of at least confirm:
+// input stopped, the display went off, and it stayed off — so the absence began
+// when input stopped, not when the display timer fired. A longer present means
+// something held the display awake (a video, a call) and is left alone; a
+// shorter away means someone woke the display again. Every decision is taken on
+// the list as given, so one rewrite never enables the next. Adjacent same-state
+// segments are merged afterwards. Pure; limit <= 0 returns segs unchanged.
+func reattributeIdleBeforeAway(segs []Segment, limit, confirm time.Duration) []Segment {
+	if limit <= 0 || len(segs) < 2 {
+		return segs
+	}
+	out := make([]Segment, len(segs))
+	copy(out, segs)
+	for i := 0; i+1 < len(segs); i++ {
+		cur, next := segs[i], segs[i+1]
+		if cur.State == activity.Present && next.State == activity.Away &&
+			cur.End.Equal(next.Start) &&
+			cur.Duration() <= limit && next.Duration() >= confirm {
+			out[i].State = activity.Away
+		}
+	}
+	return mergeSegments(out)
+}
+
+// mergeSegments joins adjacent, contiguous, same-state segments.
+func mergeSegments(pieces []Segment) []Segment {
+	var merged []Segment
+	for _, p := range pieces {
+		if n := len(merged); n > 0 && merged[n-1].State == p.State && merged[n-1].End.Equal(p.Start) {
+			merged[n-1].End = p.End
+		} else {
+			merged = append(merged, p)
+		}
+	}
+	return merged
+}
+
+// rawSegments collapses the sample stream into contiguous same-state spans
+// exactly as recorded: each gap up to maxGap is credited to the earlier
+// sample's state, and any excess is a system-sleep "away" span.
+func rawSegments(samples []activity.Sample, maxGap time.Duration, loc *time.Location) []Segment {
 	if len(samples) < 2 {
 		return nil
 	}
@@ -127,16 +190,7 @@ func Segments(samples []activity.Sample, maxGap time.Duration, loc *time.Locatio
 		}
 	}
 
-	// Merge adjacent, contiguous, same-state pieces.
-	var merged []Segment
-	for _, p := range pieces {
-		if n := len(merged); n > 0 && merged[n-1].State == p.State && merged[n-1].End.Equal(p.Start) {
-			merged[n-1].End = p.End
-		} else {
-			merged = append(merged, p)
-		}
-	}
-	return merged
+	return mergeSegments(pieces)
 }
 
 // WorkBreak is an away span long enough to count as a break, within a session.
@@ -202,7 +256,7 @@ func (s Session) Duration() time.Duration { return s.End.Sub(s.Start) }
 // are marked CarriedOut / CarriedIn so a consumer can tell a cut from a real
 // start or end.
 func Sessions(samples []activity.Sample, p Params, loc *time.Location) []Session {
-	segs := Segments(samples, p.MaxGap, loc)
+	segs := Segments(samples, p, loc)
 
 	var out []Session
 	var buf []Segment

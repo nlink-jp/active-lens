@@ -69,6 +69,15 @@ afternoon out. Shorter absences stay inside the session: those of at least
 `work.break_minutes` (default 10) are **breaks**, and anything shorter folds into
 continuous work. Both *operating* and *present* count as "at the machine".
 
+**Leaving the desk.** When input stops and the display then goes off (or the
+screen locks) and stays off for a minute, the no-input stretch before it — up to
+`work.idle_before_away_minutes` (default 10) — is counted as part of the absence:
+you had already left when the display timer fired. A longer no-input stretch (a
+video or a call holding the display awake) stays *present*, and so does one after
+which the display came back within a minute. Match the setting to your
+display-sleep timeout; `0` turns it off. See
+[ADR 0003](docs/en/adr/0003-idle-before-away.md).
+
 A session is never split at midnight. It is filed, whole, under the **logical
 day** it started in — the day that begins at `work.day_start_hour` (default
 04:00) rather than at 00:00. So an evening that runs to 00:59 belongs to the
@@ -206,6 +215,7 @@ Optional `config.toml` in `~/Library/Application Support/active-lens/`
 | `sampling.max_gap_seconds` | `interval × 3` | Gap cap; excess counts as away (sleep) |
 | `work.break_minutes` | `10` | Min away span counted as a break inside a session |
 | `work.session_gap_minutes` | `240` | Away span that ends a session; must exceed `break_minutes` |
+| `work.idle_before_away_minutes` | `10` | No input up to this long before the display goes off counts as away; match your display-sleep timeout, `0` to turn off |
 | `work.day_start_hour` | `4` | Local hour a logical day begins; `0` for calendar days |
 | `work.day_boundary` | `"session"` | `"session"`: a session stays on the day it started. `"strict"`: the boundary cuts it, so each day gets only its own hours |
 | `storage.db_path` | data dir | Where samples live; point at iCloud/Dropbox for loose sync |
@@ -228,9 +238,14 @@ labels. Nothing leaves your machine.
 
 - Being input-based, watching a video with no input counts as **present**; after
   full inactivity and the display sleeping it becomes **away**.
-- Just after you leave, before the display auto-sleeps, time is briefly
-  classified as **present**. This depends on your Energy Saver display-sleep
-  setting.
+- Just after you leave, before the display auto-sleeps, the samples are
+  recorded as **present**. Aggregation counts that stretch as away once the
+  display has been off for a minute (`work.idle_before_away_minutes`), so an
+  open session's end and active time move back by up to that long after you
+  leave. If your display sleeps later than the setting, the stretch stays
+  present.
+- No input for under ten minutes cannot be told apart from having left: locking
+  the screen and walking off right after reading counts that reading as absence.
 - Placing the DB in an iCloud/Dropbox folder assumes a single writer (one
   machine's daemon). Multi-device concurrent writes are not supported.
 
