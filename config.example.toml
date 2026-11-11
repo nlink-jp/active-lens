@@ -34,7 +34,7 @@
 # away from the moment input stopped: you had already left. Match it to your
 # display-sleep timeout. A longer no-input stretch (a video, a call holding the
 # display awake) stays "present"; so does one after which the display came back
-# within a minute. Set to 0 to turn this off.
+# within a minute. Set to 0 to turn this off. At most 2880 (48 hours).
 # idle_before_away_minutes = 10
 
 # Activity of at most this many minutes that lies between two away spans, each
@@ -42,7 +42,7 @@
 # in the middle of an absence, and the absence went on. Without this, thirty
 # seconds at the keyboard three hours after you left turns those three hours
 # into a "break" and moves the end of your working day to that touch. Set to 0
-# to count every touch as work.
+# to count every touch as work. At most 2880 (48 hours).
 # brief_visit_minutes = 2
 
 # Local hour (0-23) a logical day begins at. Activity before it is filed under

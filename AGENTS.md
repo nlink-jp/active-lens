@@ -105,7 +105,15 @@ core/
   The read also carries one neighbour sample on each side, so a recording gap
   longer than the read is an interval between two samples and becomes away; the
   one in front is added as an away marker, because with its own state it opens a
-  sliver of a session that `now` would show.
+  sliver of a session that `now` would show, and only when another sample was
+  read, because alone it would be the sample `now` reports the state of.
+  The yardstick for any change here is `TestReadsGiveWhatTheWholeRecordGives`:
+  what a command derives for a window must equal the derivation over every
+  sample. "Unchanged from the previous read" is the wrong test — the previous
+  read was wrong wherever the record has a break longer than the read.
+- **Rule limits and `max_gap` are capped at what a read can honour**
+  (`maxRuleMinutes`, `maxGapSeconds` in `core/config`). A reach longer than the
+  48-hour read makes a day's figures depend on the window asked for.
 - **The hour split walks UTC quarter-hours** (`nextHour`). Rebuilding an hour
   from its calendar fields hung when clocks fall back (the repeated hour resolves
   to its first occurrence), and stepping a whole hour mis-bucketed where clocks

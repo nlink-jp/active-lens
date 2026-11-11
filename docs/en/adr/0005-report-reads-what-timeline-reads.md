@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11-11
-**Targets:** the read and the totals of `report` / `today` (`cmd`, `core/aggregate`, `core/store`)
+**Targets:** the read and the totals of `report` / `today` (`cmd`, `core/aggregate`, `core/store`), and `timeline` / `now`, which share the read
 **Amends:** ADR 0003 §3.3 and ADR 0004 §5 (both accepted, as "the edge residual", a disagreement this removes)
 
 ---
@@ -54,7 +54,9 @@ state at all, and the day totalled less than 24 hours.
   with the machine off), that time is counted as away. Only the time before the
   first sample ever, and after the last, is not counted.
 - **A day's figures do not depend on the `--since` / `--until` it was asked
-  with.**
+  with.** This holds for `timeline` as well as `report` / `today`, since they
+  share the read: **every command gives, for its window, what the whole record
+  would give** (except when the read hits its cap without finding a break).
 - Raw samples are untouched.
 
 ### 2.2 What changes (whatever the rules are set to)
@@ -134,9 +136,23 @@ and third promises of §2.1.
 - An interruption becomes away as the interval between two samples, by
   `rawSegments`' existing `max_gap` handling. Before the record's first sample
   and after its last there is no sample to add, and nothing is counted.
-- **The output of `timeline` / `now` does not change.** The sample in front is an
-  away marker and adds no activity. The one behind has no interval after it, so
-  it adds no activity either, only the time up to it.
+- **The output of `timeline` / `now` changes where the previous read was wrong.**
+  Each change is toward what the whole record gives (the first draft said "does
+  not change"; the pre-release verification produced counter-examples).
+  - When the read ends inside a break in the record (a laptop shut on Friday and
+    opened on Monday, asked for Friday). The sample behind is now there, so the
+    last sample is credited up to `max_gap` and the rules that look at "the away
+    after" apply to the tail: the day's end moves by at most `max_gap`, or a
+    trailing idle or visit becomes away.
+  - When the head of the read follows a long break. The marker in front is now
+    there, so an away is seen before the first run, and a brief first touch is a
+    visit rather than "a run at the head, left alone". The start of the session
+    in `now` and `timeline` moves later by that much.
+  - With `until` at now and no break in the record longer than 48 hours, nothing
+    changes.
+- **The marker in front is added only when there is another sample.** A list of
+  the marker alone makes no segment, and `now` would report, as "the state of the
+  latest sample", an away that was never recorded.
 - The read is **always** held to now. It was not when `until` lay after now
   (`--until <today>` makes `until` the start of tomorrow), and samples stamped in
   the future were read.
@@ -163,6 +179,13 @@ and third promises of §2.1.
 
 ### 3.5 Errors
 
+The limits of the rules and of the sampling gap are held to what a read can
+honour (`core/config`): `idle_before_away_minutes` and `brief_visit_minutes` at
+most 2,880 (48 hours), `max_gap_seconds` at most 86,400, `interval_seconds` at
+most a third of that. Beyond these, a rule's reach or the time credited to one
+sample exceeds the read, and a day's figures change with the window asked for
+(reproduced by the verification).
+
 A failure of `LastBefore` / `FirstAfter` is the command's error, like a failure
 of the existing query. There is no other new failure path.
 
@@ -171,10 +194,10 @@ of the existing query. There is no other new failure path.
 | step | what | done when |
 |---|---|---|
 | 1 | `Clip`, `RangeOf` / `ByDayOf` / `ByHourOfDayOf`; the existing functions become wrappers | the unit tests in §6 pass and `core/aggregate`'s existing tests pass with their expectations unchanged |
-| 2 | the two `store` queries, and `samplesForWindow`'s neighbours and its hold at now (§3.3) | the "interruption" and "unchanged" tests in §6 pass |
+| 2 | the two `store` queries, and `samplesForWindow`'s neighbours and its hold at now (§3.3) | the "interruption" and "the whole record" tests in §6 pass |
 | 3 | `emitReport` / `buildReport` as §3.4 says | the command-level tests in §6 pass; `cmd`'s existing `buildReport` tests, whose samples lie inside the window, pass with their expectations unchanged |
 | 4 | the relevant entries leave "Limitations" in the README (en + ja); CHANGELOG, AGENTS.md, and a "resolved by ADR 0005" note at ADR 0003 §3.3 and ADR 0004 §5 | the documents match the behaviour |
-| 5 | check against the real record | for each past logical day, `report`'s operating + present equals the `segments` of a `timeline` read from two days earlier (including a continuation filed under the day before), cut to that day and summed; a past day between the record's first and last sample totals 24 hours; `timeline` / `now` output equals what it was before |
+| 5 | check against the real record | for each past logical day, `report`'s operating + present equals the `segments` of a `timeline` read from two days earlier (including a continuation filed under the day before), cut to that day and summed; a past day between the record's first and last sample totals 24 hours; on a record with no long breaks, `timeline` / `now` output equals what it was before |
 | 6 | one independent verification before release (conformance to this ADR; separately, any defect noticed) | its findings are triaged and the defects fixed |
 
 ## 5. Consequences
@@ -239,14 +262,27 @@ with "the `Segments` of the whole stream, cut to the window and summed".
 - `until` after now (`--until <today>`) with samples stamped in the future: not
   read.
 
+**The whole record (§3.3)**
+- For many seeded records (work, breaks, touches, idles, breaks in the record of
+  up to eleven days), each window's `timeline` days and `report` totals equal
+  what is derived from every sample (`session` and `strict`).
+- The read ends inside a break in the record: the day asked for alone equals the
+  day asked for inside a week, and the trailing idle is away.
+- After a two-week break, a 30-second touch, 15 minutes away, then work: the
+  session in `timeline` and in `now` begins with the work.
+- The record stopped three days ago: `now` reports no state and no session (not
+  the marker's).
+
 **Unchanged**
-- With the neighbours added, each day's entry in `timeline` and the output of
-  `now` equal what they are without (for a stream with an interruption, one with
-  an anchor, one without, one that begins in activity).
 - `sample_count` is the number of samples in `[since, until)` and excludes one
   exactly at `until`.
 - The existing `buildReport` tests, whose samples lie inside the window, pass
   with their expectations unchanged.
+
+**Configuration and arguments**
+- A value past a rule's or the gap's limit is an error; the limit itself is
+  accepted.
+- `--until` the day before `--since`: an error, not an empty window.
 
 ## 7. Alternatives rejected
 

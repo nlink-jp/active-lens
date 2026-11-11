@@ -31,6 +31,20 @@ All notable changes to active-lens are documented here. The format follows
   the day counted nothing when asked for alone and 24 hours of away when asked
   for with a wider window. The read now carries the sample before it and the one
   after it.
+- `timeline` and `now` give what the whole record gives where a break in the
+  record used to cut the read short: a read ending inside a break sees the away
+  after its last sample (a trailing idle or visit is then the absence), and a
+  read whose head follows a long break sees the away before its first run (a
+  brief first touch is then a visit, not the start of the session). A record
+  with no break longer than 48 hours reads as before.
+- `--until` the day before `--since` is an error. It made an empty window whose
+  reported end preceded its start.
+- `idle_before_away_minutes` and `brief_visit_minutes` are limited to 48 hours,
+  `max_gap_seconds` to a day and `interval_seconds` to a third of that. Longer
+  values reached past what a command reads, so a day's figures changed with the
+  window asked for.
+- `timeline`, under a range with no samples, no longer asks whether the daemon
+  is running: the machine may simply have been asleep.
 - `--until <today>` no longer reads samples stamped after now. The hold at the
   present was skipped when `until` lay in the future, which it does for today.
 - Under a report with no samples but with away counted, the hint no longer asks
