@@ -343,8 +343,13 @@ func TestReport_CountsNothingOutsideTheRecord(t *testing.T) {
 }
 
 func TestResolveRange_UntilMustComeAfterSince(t *testing.T) {
-	if _, _, err := resolveRange("2026-07-10", "2026-07-09", time.UTC, 4); err == nil {
-		t.Error("--until the day before --since gave an empty window instead of an error")
+	_, _, err := resolveRange("2026-07-10", "2026-07-09", time.UTC, 4)
+	if err == nil {
+		t.Fatal("--until the day before --since gave an empty window instead of an error")
+	}
+	// The message names the days that were asked for.
+	if want := "--until (2026-07-09) is before --since (2026-07-10)"; err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
 	}
 	if _, _, err := resolveRange("2026-07-10", "2026-07-10", time.UTC, 4); err != nil {
 		t.Errorf("a single day is a valid range: %v", err)

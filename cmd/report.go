@@ -591,8 +591,11 @@ func resolveRange(sinceStr, untilStr string, loc *time.Location, dayStartHour in
 	// two equal: an empty window whose reported end precedes its start, which
 	// passed a check that only refused `until` strictly before `since`.
 	if !until.After(since) {
+		// Name the days as logical days, which is what the flags are: `until`
+		// is the exclusive end, and both instants sit at day_start_hour.
 		return since, until, fmt.Errorf("--until (%s) is before --since (%s)",
-			until.Add(-time.Second).Format("2006-01-02"), since.Format("2006-01-02"))
+			aggregate.LogicalDate(until.Add(-time.Second), dayStartHour),
+			aggregate.LogicalDate(since, dayStartHour))
 	}
 	return since, until, nil
 }
