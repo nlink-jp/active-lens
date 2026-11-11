@@ -90,6 +90,15 @@ func Load(path, dataDir string) (Config, error) {
 	return apply(cfg, data)
 }
 
+// Upper bounds for durations given in the config. A year is far past any
+// sensible value; the point is that the number, multiplied into a
+// time.Duration, cannot overflow into a negative one — which every consumer
+// would read as "off" or "zero" without a word.
+const (
+	maxSeconds = 366 * 24 * 60 * 60
+	maxMinutes = 366 * 24 * 60
+)
+
 // apply overlays parsed TOML onto cfg. Exposed via Load; separated for testing.
 func apply(cfg Config, data []byte) (Config, error) {
 	kv, err := parse(data)
@@ -98,8 +107,8 @@ func apply(cfg Config, data []byte) (Config, error) {
 	}
 	if v, ok := kv["sampling.interval_seconds"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return cfg, fmt.Errorf("sampling.interval_seconds: want positive integer, got %q", v)
+		if err != nil || n <= 0 || n > maxSeconds {
+			return cfg, fmt.Errorf("sampling.interval_seconds: want integer 1..%d, got %q", maxSeconds, v)
 		}
 		cfg.IntervalSeconds = n
 		// Keep the derived default in sync unless max_gap is set explicitly.
@@ -109,36 +118,38 @@ func apply(cfg Config, data []byte) (Config, error) {
 	}
 	if v, ok := kv["sampling.active_threshold_seconds"]; ok {
 		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || f < 0 {
-			return cfg, fmt.Errorf("sampling.active_threshold_seconds: want non-negative number, got %q", v)
+		// !(f >= 0) also rejects NaN, which compares false with everything and
+		// would make no sample ever classify as operating.
+		if err != nil || !(f >= 0) || f > maxSeconds {
+			return cfg, fmt.Errorf("sampling.active_threshold_seconds: want number 0..%d, got %q", maxSeconds, v)
 		}
 		cfg.ActiveThresholdSeconds = f
 	}
 	if v, ok := kv["sampling.max_gap_seconds"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return cfg, fmt.Errorf("sampling.max_gap_seconds: want positive integer, got %q", v)
+		if err != nil || n <= 0 || n > maxSeconds {
+			return cfg, fmt.Errorf("sampling.max_gap_seconds: want integer 1..%d, got %q", maxSeconds, v)
 		}
 		cfg.MaxGapSeconds = n
 	}
 	if v, ok := kv["work.break_minutes"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return cfg, fmt.Errorf("work.break_minutes: want positive integer, got %q", v)
+		if err != nil || n <= 0 || n > maxMinutes {
+			return cfg, fmt.Errorf("work.break_minutes: want integer 1..%d, got %q", maxMinutes, v)
 		}
 		cfg.BreakMinutes = n
 	}
 	if v, ok := kv["work.session_gap_minutes"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return cfg, fmt.Errorf("work.session_gap_minutes: want positive integer, got %q", v)
+		if err != nil || n <= 0 || n > maxMinutes {
+			return cfg, fmt.Errorf("work.session_gap_minutes: want integer 1..%d, got %q", maxMinutes, v)
 		}
 		cfg.SessionGapMinutes = n
 	}
 	if v, ok := kv["work.idle_before_away_minutes"]; ok {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
-			return cfg, fmt.Errorf("work.idle_before_away_minutes: want non-negative integer, got %q", v)
+		if err != nil || n < 0 || n > maxMinutes {
+			return cfg, fmt.Errorf("work.idle_before_away_minutes: want integer 0..%d, got %q", maxMinutes, v)
 		}
 		cfg.IdleBeforeAwayMinutes = n
 	}

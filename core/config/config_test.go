@@ -160,3 +160,26 @@ func TestIdleBeforeAway(t *testing.T) {
 		}
 	}
 }
+
+// A value large enough to overflow a time.Duration turns negative, and every
+// consumer reads a negative duration as "off". NaN compares false with
+// everything, so a NaN threshold would classify nothing as operating.
+func TestApply_RejectsValuesThatOverflowOrAreNotNumbers(t *testing.T) {
+	for _, bad := range []string{
+		"[work]\nidle_before_away_minutes = 153722868\n",
+		"[work]\nbreak_minutes = 9223372036854775807\n",
+		"[work]\nsession_gap_minutes = 153722868\n",
+		"[sampling]\ninterval_seconds = 9223372036854775807\n",
+		"[sampling]\nmax_gap_seconds = 9223372037\n",
+		"[sampling]\nactive_threshold_seconds = NaN\n",
+		"[sampling]\nactive_threshold_seconds = Inf\n",
+	} {
+		if _, err := apply(Defaults("/data"), []byte(bad)); err == nil {
+			t.Errorf("apply(%q) = nil error, want error", bad)
+		}
+	}
+	// The bound itself is accepted.
+	if _, err := apply(Defaults("/data"), []byte("[work]\nidle_before_away_minutes = 527040\n")); err != nil {
+		t.Errorf("the upper bound was rejected: %v", err)
+	}
+}
