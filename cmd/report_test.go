@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -616,5 +617,26 @@ func TestBuildNow_IdleIsRecountedOnceTheAwayIsConfirmed(t *testing.T) {
 	late := displayOff.Add(2 * time.Minute)
 	if n := buildNow(upTo(late), late, time.Minute, p, loc); n.Session == nil || n.Session.EndUnix != inputStopped.Unix() {
 		t.Errorf("2m into the away the session should end where input stopped: %+v", n.Session)
+	}
+}
+
+// "Could not ask launchd" must not read as "not loaded".
+func TestEmitStatusJSON_SaysWhenTheDaemonStateIsUnknown(t *testing.T) {
+	cfg := config.Defaults(t.TempDir())
+	var buf bytes.Buffer
+	if err := emitStatusJSON(&buf, cfg, platform.DaemonInfo{}, errors.New("launchctl: timed out")); err != nil {
+		t.Fatalf("emitStatusJSON: %v", err)
+	}
+	var got statusJSON
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.DaemonStatusError != "launchctl: timed out" {
+		t.Errorf("daemon_status_error = %q", got.DaemonStatusError)
+	}
+	buf.Reset()
+	_ = emitStatusJSON(&buf, cfg, platform.DaemonInfo{}, nil)
+	if strings.Contains(buf.String(), "daemon_status_error") {
+		t.Errorf("the field is published when there is no error:\n%s", buf.String())
 	}
 }

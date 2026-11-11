@@ -207,3 +207,26 @@ func TestBriefVisit(t *testing.T) {
 		}
 	}
 }
+
+// A misspelt key used to be skipped, leaving the default in force without a
+// word — the opposite of what a setting written to turn a rule off asks for.
+func TestApply_RejectsUnknownKeys(t *testing.T) {
+	for _, bad := range []string{
+		"[work]\nbrief_visit_minute = 0\n",
+		"[work]\nidle_before_away = 0\n",
+		"[sampling]\ninterval = 15\n",
+		"brief_visit_minutes = 0\n", // no section
+	} {
+		if _, err := apply(Defaults("/data"), []byte(bad)); err == nil {
+			t.Errorf("apply(%q) = nil error, want error", bad)
+		}
+	}
+	// Every documented key is accepted.
+	all := "[sampling]\ninterval_seconds = 15\nactive_threshold_seconds = 30\nmax_gap_seconds = 45\n" +
+		"[work]\nbreak_minutes = 10\nsession_gap_minutes = 240\nidle_before_away_minutes = 10\n" +
+		"brief_visit_minutes = 2\nday_start_hour = 4\nday_boundary = \"session\"\n" +
+		"[storage]\ndb_path = \"/tmp/x.db\"\n"
+	if _, err := apply(Defaults("/data"), []byte(all)); err != nil {
+		t.Errorf("the documented keys were rejected: %v", err)
+	}
+}

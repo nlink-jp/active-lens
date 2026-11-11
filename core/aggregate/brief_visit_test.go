@@ -76,6 +76,11 @@ func TestDropBriefVisits_NeedsContiguity(t *testing.T) {
 	if got := dropBriefVisits(in, 2*time.Minute, 10*time.Minute); got[1].State != op {
 		t.Errorf("a touch not adjoining the away after it was rewritten")
 	}
+	in = seq(span{aw, 30 * time.Minute}, span{op, 30 * time.Second}, span{aw, 30 * time.Minute})
+	in[0].End = in[0].End.Add(-time.Second) // a hole before the touch
+	if got := dropBriefVisits(in, 2*time.Minute, 10*time.Minute); got[1].State != op {
+		t.Errorf("a touch not adjoining the away before it was rewritten")
+	}
 }
 
 // stream lays down 15-second samples for each (state, duration) part.

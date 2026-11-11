@@ -38,7 +38,9 @@ func unbroken(from time.Time, d time.Duration) []activity.Sample {
 
 func lookbackConfig() config.Config {
 	return config.Config{SessionGapMinutes: 30, MaxGapSeconds: 300,
-		BreakMinutes: 10, DayStartHour: 5}
+		BreakMinutes: 10, DayStartHour: 5,
+		// Both rewrite rules on, as shipped: the anchor has to hold with them.
+		IdleBeforeAwayMinutes: 10, BriefVisitMinutes: 2}
 }
 
 // The defect this closes: a session is cut at the *second* day boundary after

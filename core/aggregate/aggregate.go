@@ -71,19 +71,34 @@ func emitSplit(start, end time.Time, st activity.State, loc *time.Location, fn f
 	}
 }
 
-// nextHour returns the start of the hour strictly after t, in t's location.
+// nextHour returns the next instant after t at which a local hour begins or the
+// clocks change, in t's location.
 //
-// It steps forward from t by what is left of t's own hour, rather than
-// rebuilding the hour from its calendar fields. When clocks fall back a local
+// It steps forward from t, rather than rebuilding the hour from its calendar
+// fields. When clocks fall back a local
 // hour happens twice, and time.Date resolves the repeated "01:00" to its first
 // occurrence — so from inside the second one the rebuilt hour plus one landed
 // back on the instant it started from, and the split never advanced. A zone on
 // summer time hung `report` and `today` on the night it ended.
+//
+// Stepping a whole hour is not enough either: where the clocks change part-way
+// through a local hour (Chatham changes at :45) the hour after t is not sixty
+// minutes away, and one piece would span two local hours. So it walks the UTC
+// quarter-hours — every zone offset in use is a multiple of fifteen minutes,
+// which puts every local hour start and every clock change on one — and stops
+// at the first that begins a local hour or carries a different offset. A piece
+// therefore never crosses a local hour or a clock change, and always advances.
 func nextHour(t time.Time) time.Time {
-	into := time.Duration(t.Minute())*time.Minute +
-		time.Duration(t.Second())*time.Second +
-		time.Duration(t.Nanosecond())
-	return t.Add(time.Hour - into)
+	const quarter = 15 * time.Minute
+	_, offset := t.Zone()
+	n := t.Truncate(quarter).Add(quarter)
+	for i := 0; i < 8; i++ {
+		if _, o := n.Zone(); o != offset || (n.Minute() == 0 && n.Second() == 0) {
+			return n
+		}
+		n = n.Add(quarter)
+	}
+	return n
 }
 
 // Range returns the grand totals across all samples.

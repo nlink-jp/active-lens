@@ -58,13 +58,19 @@ func TestTimeline_ADayReadsTheSameWhateverUntilIs(t *testing.T) {
 	next := day.AddDate(0, 0, 1)
 	all := lay(day.Add(-6*time.Hour),
 		part{6*time.Hour + 16*time.Hour, activity.Away}, // away until 20:00
-		part{10 * time.Hour, activity.Operating},        // 20:00 → 06:00, across the boundary
+		part{9 * time.Hour, activity.Operating},         // 20:00 → 05:00, across the boundary
+		part{30 * time.Minute, activity.Away},           // a break after the boundary
+		part{30 * time.Minute, activity.Operating},      // → 06:00
 		part{8 * time.Hour, activity.Away},
 		part{2 * time.Hour, activity.Operating}, // the next day's own work
 		part{6 * time.Hour, activity.Away},
 	)
 	alone := dayOf(t, all, cfg, day, next, "2026-07-09")
 	wider := dayOf(t, all, cfg, day, next.AddDate(0, 0, 1), "2026-07-09")
+	if len(alone.Breaks) != 1 || len(wider.Breaks) != 1 || alone.Breaks[0] != wider.Breaks[0] {
+		t.Errorf("breaks: asked alone %+v, asked with the next day %+v; want the one 05:00 break in both",
+			alone.Breaks, wider.Breaks)
+	}
 	if alone.WorkEndUnix != wider.WorkEndUnix || alone.ActiveSeconds != wider.ActiveSeconds || len(alone.Breaks) != len(wider.Breaks) {
 		t.Errorf("asked alone: end %d active %d breaks %d; asked with the next day: end %d active %d breaks %d",
 			alone.WorkEndUnix, alone.ActiveSeconds, len(alone.Breaks),
@@ -147,5 +153,72 @@ func TestSamplesForWindow_AVisitAfterTheAnchorReadsTheSame(t *testing.T) {
 		if d.HasWork && d.WorkStartUnix != base.Add(12*time.Hour+75*time.Second).Unix() {
 			t.Errorf("%s: work starts at %d; the visit should not open the session", d.Date, d.WorkStartUnix)
 		}
+	}
+}
+
+// A database whose first sample is activity has no break to anchor on, and no
+// wider read will find one. That is the whole record, not a machine awake for
+// two weeks.
+func TestSamplesForWindow_TheFirstSampleEverIsNotACappedRead(t *testing.T) {
+	loc := time.UTC
+	cfg := config.Defaults("/data")
+	first := time.Date(2026, 7, 9, 9, 0, 0, 0, loc)
+	all := lay(first, part{3 * time.Hour, activity.Operating})
+
+	// Asked for now, on a fresh install.
+	st := &wholeStream{samples: all}
+	now := first.Add(3 * time.Hour)
+	if _, capped, err := samplesForWindow(st, now, now, cfg, loc); err != nil || capped {
+		t.Errorf("fresh install: capped=%v err=%v", capped, err)
+	}
+	if st.queries > 2 {
+		t.Errorf("fresh install: %d queries to learn there is nothing earlier", st.queries)
+	}
+	// Asked for the days before recording began: the forward read reaches the
+	// first samples, and that is still not a capped read.
+	st = &wholeStream{samples: all}
+	since := first.AddDate(0, 0, -3)
+	if _, capped, _ := samplesForWindow(st, since, since.AddDate(0, 0, 2), cfg, loc); capped {
+		t.Errorf("a window before recording began was reported as capped")
+	}
+}
+
+// With the clock set back, samples stamped after now exist. A read for now must
+// not include them: a session cannot end in the future.
+func TestSamplesForWindow_DoesNotReadPastThePresent(t *testing.T) {
+	loc := time.UTC
+	cfg := config.Defaults("/data")
+	base := time.Date(2026, 7, 9, 0, 0, 0, 0, loc)
+	all := lay(base, part{6 * time.Hour, activity.Away}, part{4 * time.Hour, activity.Operating})
+	now := base.Add(8 * time.Hour)
+	defer func(f func() time.Time) { clockNow = f }(clockNow)
+	clockNow = func() time.Time { return now }
+
+	samples, _, err := samplesForWindow(&wholeStream{samples: all}, now, now, cfg, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range samples {
+		if s.TS.After(now) {
+			t.Fatalf("read a sample at %s, after now (%s)", s.TS, now)
+		}
+	}
+	// A window that ended in the past still reads ahead of its own end.
+	past := base.Add(7 * time.Hour)
+	samples, _, _ = samplesForWindow(&wholeStream{samples: all}, base, past, cfg, loc)
+	if last := samples[len(samples)-1].TS; !last.After(past) {
+		t.Errorf("a past window stopped at its own end (%s)", last)
+	}
+}
+
+func TestBuildNow_AFutureSampleIsNotRecording(t *testing.T) {
+	loc := time.UTC
+	now := time.Date(2026, 7, 9, 12, 0, 0, 0, loc)
+	samples := []activity.Sample{
+		{TS: now.Add(time.Hour), State: activity.Operating},
+		{TS: now.Add(time.Hour + 15*time.Second), State: activity.Operating},
+	}
+	if n := buildNow(samples, now, time.Minute, paramsOf(config.Defaults("/data")), loc); n.Recording {
+		t.Errorf("a sample an hour ahead of now reads as recording")
 	}
 }

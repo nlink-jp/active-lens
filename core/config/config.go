@@ -106,10 +106,31 @@ const (
 )
 
 // apply overlays parsed TOML onto cfg. Exposed via Load; separated for testing.
+var knownKeys = map[string]bool{
+	"sampling.interval_seconds":         true,
+	"sampling.active_threshold_seconds": true,
+	"sampling.max_gap_seconds":          true,
+	"work.break_minutes":                true,
+	"work.session_gap_minutes":          true,
+	"work.idle_before_away_minutes":     true,
+	"work.brief_visit_minutes":          true,
+	"work.day_start_hour":               true,
+	"work.day_boundary":                 true,
+	"storage.db_path":                   true,
+}
+
 func apply(cfg Config, data []byte) (Config, error) {
 	kv, err := parse(data)
 	if err != nil {
 		return cfg, err
+	}
+	// A key this version does not know is an error, not something to skip: a
+	// misspelt `brief_visit_minute = 0` would otherwise leave the rule on at its
+	// default without a word, which is the opposite of what was asked for.
+	for k := range kv {
+		if !knownKeys[k] {
+			return cfg, fmt.Errorf("unknown setting %q (see config.example.toml)", k)
+		}
 	}
 	if v, ok := kv["sampling.interval_seconds"]; ok {
 		n, err := strconv.Atoi(v)

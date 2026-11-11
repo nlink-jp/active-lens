@@ -38,6 +38,21 @@ All notable changes to active-lens are documented here. The format follows
   emitted are unchanged. A window ending now — `--days N`, which the GUI uses —
   was never affected.
 
+- **A misspelt config key is an error.** An unknown key used to be skipped, so
+  `brief_visit_minute = 0` left the rule on at its default without a word.
+- On a fresh install — or for a window before recording began — `now` and
+  `timeline` no longer print "awake without a break for longer than 336h" after
+  seven queries. A stream whose first sample is activity has no break to find;
+  the widening read now stops when it finds nothing earlier.
+- A sample stamped in the future (the clock was set back) no longer reads as
+  "recording", and a read for now no longer includes it.
+- `status --json` publishes `daemon_status_error` when the daemon's state could
+  not be determined, instead of reporting it as not loaded.
+- Time is attributed to the right hour of day where the clocks change part-way
+  through an hour (Pacific/Chatham, at :45); a piece used to span two local
+  hours there.
+- `now`'s "no work session" line says "in at least the last Nh": the read may
+  have gone further back than N looking for a break.
 - **`report` and `today` no longer hang when clocks fall back.** The split at
   local hour boundaries rebuilt each hour from its calendar fields; in the hour
   that happens twice when summer time ends, that resolved to the first

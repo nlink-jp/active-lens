@@ -137,7 +137,15 @@ on what was asked.
   session begun after `until` is not in the output. `sample_count` still counts
   `[since, until)`.
 - With `until` at now (the GUI's `--days N`, `now`) there is nothing ahead to
-  read and nothing changes.
+  read and nothing changes. The read is held to the present: a sample stamped in
+  the future, left behind when the clock is set back, would put a session's end
+  ahead of now.
+- Reading ahead can reach the first samples ever recorded (which begin in
+  activity) when the window asked for lies before recording began. That stream
+  has no absence to anchor on, and reading further back will not find one. When
+  a wider read yields nothing earlier, the widening stops there and does not
+  report "no break as far back as the cap" (the same change fixes an existing
+  defect: on a fresh install `now` / `timeline` gave that report on every call).
 - `report` / `today` are per-second totals and have no sessions. Their read is
   unchanged (the residual in §5).
 

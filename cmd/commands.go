@@ -153,19 +153,37 @@ const maxLookback = 14 * 24 * time.Hour
 // away after it. `lookback` is long enough ahead for the same reason it is
 // behind: a session is cut at 48 h and the absence that ends one is a
 // session_gap, so any session begun before `until` ends inside it. With `until`
-// at now there is nothing ahead to read and nothing changes.
+// at now there is nothing ahead to read and nothing changes — and the read is
+// held to the present, so a sample stamped in the future (the clock was set
+// back) cannot put a session's end ahead of now.
+//
+// Widening stops, uncapped, once a wider read finds nothing earlier: the stream
+// then begins at the first sample ever recorded (or after a silence longer than
+// the step), and no read can find a break before it. Without this a database
+// whose first sample is activity — a fresh install — reported "awake without a
+// break for 336h" on every call, after seven queries.
 func samplesForWindow(st sampleQuerier, since, until time.Time,
 	cfg config.Config, loc *time.Location) ([]activity.Sample, bool, error) {
 	p := paramsOf(cfg)
 	back := lookback(cfg)
-	for {
-		samples, err := st.Query(since.Add(-back), until.Add(lookback(cfg)))
+	end := until.Add(lookback(cfg))
+	if now := clockNow(); end.After(now) && !until.After(now) {
+		end = now
+	}
+	var earliest time.Time
+	for first := true; ; first = false {
+		samples, err := st.Query(since.Add(-back), end)
 		if err != nil {
 			return nil, false, err
 		}
 		if aggregate.StartsAfterABreak(samples, p, loc) {
 			return samples, false, nil
 		}
+		head := earliestSample(samples)
+		if !first && head.Equal(earliest) {
+			return samples, false, nil
+		}
+		earliest = head
 		if back >= maxLookback {
 			return samples, true, nil
 		}
@@ -174,6 +192,20 @@ func samplesForWindow(st sampleQuerier, since, until time.Time,
 			back = maxLookback
 		}
 	}
+}
+
+// clockNow is the wall clock, replaceable in tests.
+var clockNow = time.Now
+
+// earliestSample is the timestamp of the oldest sample, or zero for none.
+func earliestSample(samples []activity.Sample) time.Time {
+	var out time.Time
+	for _, s := range samples {
+		if out.IsZero() || s.TS.Before(out) {
+			out = s.TS
+		}
+	}
+	return out
 }
 
 // noteIfCapped says so when the read stopped at `maxLookback` without finding a
@@ -470,7 +502,7 @@ func runStatus(args []string) error {
 }
 
 // emitStatusJSON writes the machine-readable status the GUI consumes.
-func emitStatusJSON(w io.Writer, cfg config.Config, info platform.DaemonInfo, _ error) error {
+func emitStatusJSON(w io.Writer, cfg config.Config, info platform.DaemonInfo, daemonErr error) error {
 	cfgPath, _ := platform.ConfigFilePath()
 	s := statusJSON{
 		DaemonLoaded:     info.Loaded,
@@ -482,6 +514,11 @@ func emitStatusJSON(w io.Writer, cfg config.Config, info platform.DaemonInfo, _ 
 		MaxGapSeconds:    cfg.MaxGapSeconds,
 		DayStartHour:     cfg.DayStartHour,
 		DayBoundary:      cfg.DayBoundary,
+	}
+	// "Could not ask launchd" is not "not loaded": say which, so a consumer does
+	// not offer to enable recording that is already running.
+	if daemonErr != nil {
+		s.DaemonStatusError = daemonErr.Error()
 	}
 	if info.ConfigPath != "" {
 		if _, e := os.Stat(info.ConfigPath); e == nil {

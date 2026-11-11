@@ -101,6 +101,14 @@ core/
   session still running there and made a day's figures depend on the `--until`
   asked for. The rules that look at the away *after* a span need that read too.
   `report` / `today` are per-second totals and still read exactly their window.
+- **The hour split walks UTC quarter-hours** (`nextHour`). Rebuilding an hour
+  from its calendar fields hung when clocks fall back (the repeated hour resolves
+  to its first occurrence), and stepping a whole hour mis-bucketed where clocks
+  change part-way through an hour (Chatham, at :45). Every offset in use is a
+  multiple of fifteen minutes, so every local hour start and clock change falls
+  on a quarter.
+- **An unknown config key is an error.** A misspelt key used to be skipped,
+  leaving a rule on at its default when the user had written it off.
 - **The idle-before-away rule is not corrected at the edges of a read.** Padding
   the read and clipping would change `report` / `today` output even with the
   rule off. The residual (at most the limit, only when the change to away falls
@@ -116,9 +124,9 @@ core/
   `idle_before_away`, and a session made only of a display lighting with no
   input is withdrawn. Likewise (ADR 0004) a session made only of activity of at
   most `brief_visit` is withdrawn, and an open session's `end` can move back to
-  before such a visit, once the away after it reaches `break_minutes`. Nothing else may move a boundary retroactively — the menu
-  bar displays that start time. Under
-  `day_boundary = strict` the day boundary opens a *new* session at a known
+  before such a visit, once the away after it reaches `break_minutes`. Nothing
+  else may move a boundary retroactively — the menu bar displays that start
+  time. Under `day_boundary = strict` the day boundary opens a *new* session at a known
   instant; that is a new start, not a moved one.
 - **cgo is confined to `core/signal`.** SQLite is pure-Go on purpose; keep it that
   way so the rest of the tree builds/vets without a C toolchain. The `_other.go`

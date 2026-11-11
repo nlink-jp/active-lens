@@ -373,7 +373,10 @@ func buildNow(samples []activity.Sample, now time.Time, staleAfter time.Duration
 	}
 	if !last.TS.IsZero() {
 		out.State = string(last.State)
-		out.Recording = now.Sub(last.TS) <= staleAfter
+		// A sample stamped after now (the clock was set back) is not evidence
+		// that anything is recording.
+		age := now.Sub(last.TS)
+		out.Recording = age >= 0 && age <= staleAfter
 	}
 
 	sessions := aggregate.Sessions(samples, p, loc)
@@ -418,7 +421,9 @@ func printNowHuman(w io.Writer, n jsonNow, window time.Duration) {
 			fmt.Fprintln(w, "No activity recorded yet.")
 			fmt.Fprintln(w, "\nIs the daemon running? Try: active-lens status")
 		} else {
-			fmt.Fprintf(w, "No work session in the last %dh (currently %s).\n",
+			// The read may have gone further back than `window` looking for a
+			// break, so the line does not name a span it cannot vouch for.
+			fmt.Fprintf(w, "No work session in at least the last %dh (currently %s).\n",
 				int(window.Hours()), n.State)
 		}
 		return
@@ -461,18 +466,21 @@ func printNowHuman(w io.Writer, n jsonNow, window time.Duration) {
 
 // statusJSON is the machine-readable form of `status`, consumed by the GUI.
 type statusJSON struct {
-	DaemonInstalled  bool    `json:"daemon_installed"`
-	DaemonLoaded     bool    `json:"daemon_loaded"`
-	DaemonLabel      string  `json:"daemon_label"`
-	ConfigPath       string  `json:"config_path"`
-	DBPath           string  `json:"db_path"`
-	IntervalSeconds  int     `json:"interval_seconds"`
-	ThresholdSeconds float64 `json:"threshold_seconds"`
-	MaxGapSeconds    int     `json:"max_gap_seconds"`
-	DayStartHour     int     `json:"day_start_hour"`
-	DayBoundary      string  `json:"day_boundary"`      // "session" | "strict"
-	LastSampleUnix   int64   `json:"last_sample_unix"`  // 0 when no samples yet
-	LastSampleState  string  `json:"last_sample_state"` // "" when no samples yet
+	DaemonInstalled bool `json:"daemon_installed"`
+	DaemonLoaded    bool `json:"daemon_loaded"`
+	// DaemonStatusError is set when the daemon's state could not be determined;
+	// daemon_loaded is then unknown, not false.
+	DaemonStatusError string  `json:"daemon_status_error,omitempty"`
+	DaemonLabel       string  `json:"daemon_label"`
+	ConfigPath        string  `json:"config_path"`
+	DBPath            string  `json:"db_path"`
+	IntervalSeconds   int     `json:"interval_seconds"`
+	ThresholdSeconds  float64 `json:"threshold_seconds"`
+	MaxGapSeconds     int     `json:"max_gap_seconds"`
+	DayStartHour      int     `json:"day_start_hour"`
+	DayBoundary       string  `json:"day_boundary"`      // "session" | "strict"
+	LastSampleUnix    int64   `json:"last_sample_unix"`  // 0 when no samples yet
+	LastSampleState   string  `json:"last_sample_state"` // "" when no samples yet
 }
 
 func toJSONTotals(t aggregate.Totals) jsonTotals {
