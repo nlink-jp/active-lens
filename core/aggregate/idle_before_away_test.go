@@ -143,7 +143,11 @@ func withIdle(params Params) Params {
 // Every aggregation reads one segment list, so the totals and the list agree.
 func TestTotalsAndSegmentsAgree(t *testing.T) {
 	samples := idleStream(570*time.Second, 20*time.Minute)
-	for _, params := range []Params{p(45 * time.Second), withIdle(p(45 * time.Second))} {
+	// A day starting at 11:00 puts the logical day boundary inside the absence,
+	// so the per-day totals are summed across a split.
+	split := withIdle(p(45 * time.Second))
+	split.DayStartHour = 11
+	for _, params := range []Params{p(45 * time.Second), withIdle(p(45 * time.Second)), split} {
 		var want Totals
 		for _, s := range Segments(samples, params, utc) {
 			want.add(s.State, s.Duration())
@@ -156,6 +160,9 @@ func TestTotalsAndSegmentsAgree(t *testing.T) {
 			days.Operating += d.Totals.Operating
 			days.Present += d.Totals.Present
 			days.Away += d.Totals.Away
+		}
+		if params.DayStartHour == 11 && len(ByDay(samples, params, utc)) != 2 {
+			t.Errorf("the stream was meant to straddle a logical day boundary")
 		}
 		if days != want {
 			t.Errorf("IdleBeforeAway=%s: ByDay sums to %+v, want %+v", params.IdleBeforeAway, days, want)
