@@ -6,6 +6,18 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`report` and `today` no longer hang when clocks fall back.** The split at
+  local hour boundaries rebuilt each hour from its calendar fields; in the hour
+  that happens twice when summer time ends, that resolved to the first
+  occurrence and the split never advanced. Any zone with summer time was
+  affected on that night; a zone without one (Asia/Tokyo) was not.
+- Config durations large enough to overflow (`idle_before_away_minutes` and the
+  other minute and second keys past about a year) are rejected instead of
+  silently reading as "off", and `active_threshold_seconds = NaN` / `Inf` is
+  rejected instead of classifying no sample as operating.
+
 ## [0.4.0] - 2026-11-11
 
 ### Changed
