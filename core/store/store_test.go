@@ -77,3 +77,38 @@ func TestLast(t *testing.T) {
 		t.Errorf("Last = %+v, want the away sample at +1m", got)
 	}
 }
+
+func TestLastBeforeAndFirstAfterAreStrict(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, ok, err := st.LastBefore(time.Unix(100, 0)); err != nil || ok {
+		t.Fatalf("empty store: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := st.FirstAfter(time.Unix(100, 0)); err != nil || ok {
+		t.Fatalf("empty store: ok=%v err=%v", ok, err)
+	}
+	for _, ts := range []int64{100, 200, 300} {
+		if err := st.Append(activity.Sample{TS: time.Unix(ts, 0), State: activity.Operating}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		at     int64
+		before int64 // 0 = none
+		after  int64
+	}{
+		{50, 0, 100}, {100, 0, 200}, {150, 100, 200}, {200, 100, 300}, {300, 200, 0}, {350, 300, 0},
+	} {
+		b, ok, err := st.LastBefore(time.Unix(c.at, 0))
+		if err != nil || ok != (c.before != 0) || (ok && b.TS.Unix() != c.before) {
+			t.Errorf("LastBefore(%d) = %d, %v, %v; want %d", c.at, b.TS.Unix(), ok, err, c.before)
+		}
+		a, ok, err := st.FirstAfter(time.Unix(c.at, 0))
+		if err != nil || ok != (c.after != 0) || (ok && a.TS.Unix() != c.after) {
+			t.Errorf("FirstAfter(%d) = %d, %v, %v; want %d", c.at, a.TS.Unix(), ok, err, c.after)
+		}
+	}
+}

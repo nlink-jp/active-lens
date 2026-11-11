@@ -46,11 +46,33 @@ type DayTotals struct {
 	Totals Totals
 }
 
-// walkSegments replays the attributed segments — the same list the work log is
-// derived from (see Segments) — split at local hour boundaries, invoking fn for
-// each piece. samples need not be pre-sorted.
-func walkSegments(samples []activity.Sample, p Params, loc *time.Location, fn func(start time.Time, dur time.Duration, st activity.State)) {
-	for _, seg := range Segments(samples, p, loc) {
+// Clip cuts a segment list down to [since, until): each segment keeps the part
+// of itself inside the window, and one wholly outside is dropped. Order is
+// kept and the input is not modified. Pure.
+func Clip(segs []Segment, since, until time.Time) []Segment {
+	if !until.After(since) {
+		return nil
+	}
+	var out []Segment
+	for _, seg := range segs {
+		start, end := seg.Start, seg.End
+		if start.Before(since) {
+			start = since
+		}
+		if end.After(until) {
+			end = until
+		}
+		if start.Before(end) {
+			out = append(out, Segment{Start: start, End: end, State: seg.State})
+		}
+	}
+	return out
+}
+
+// walkSegments replays a segment list split at local hour boundaries, invoking
+// fn for each piece.
+func walkSegments(segs []Segment, loc *time.Location, fn func(start time.Time, dur time.Duration, st activity.State)) {
+	for _, seg := range segs {
 		emitSplit(seg.Start, seg.End, seg.State, loc, fn)
 	}
 }
@@ -101,26 +123,36 @@ func nextHour(t time.Time) time.Time {
 	return n
 }
 
-// Range returns the grand totals across all samples.
-func Range(samples []activity.Sample, p Params, loc *time.Location) Totals {
+// The totals below come in two forms. The ...Of functions total a segment list
+// the caller already holds — `report` derives one from the read `timeline`
+// uses and clips it to the window (ADR 0005). The others derive the list from
+// samples (see Segments) and total all of it.
+
+// RangeOf returns the grand totals of a segment list.
+func RangeOf(segs []Segment, loc *time.Location) Totals {
 	var tot Totals
-	walkSegments(samples, p, loc, func(_ time.Time, d time.Duration, st activity.State) {
+	walkSegments(segs, loc, func(_ time.Time, d time.Duration, st activity.State) {
 		tot.add(st, d)
 	})
 	return tot
 }
 
-// ByDay returns per-logical-day totals, sorted ascending by date. Each second is
-// attributed to the logical day it falls in — unlike Timeline, which attributes a
-// whole session to the day it started in. The two agree except when a session
-// crosses a logical day boundary.
+// Range returns the grand totals across all samples.
+func Range(samples []activity.Sample, p Params, loc *time.Location) Totals {
+	return RangeOf(Segments(samples, p, loc), loc)
+}
+
+// ByDayOf returns per-logical-day totals of a segment list, sorted ascending by
+// date. Each second is attributed to the logical day it falls in — unlike
+// Timeline, which attributes a whole session to the day it started in. The two
+// agree except when a session crosses a logical day boundary.
 //
-// Intervals are already split at hour boundaries and dayStartHour is a whole
-// hour, so no piece straddles a boundary and only the bucket key changes.
-func ByDay(samples []activity.Sample, p Params, loc *time.Location) []DayTotals {
+// Pieces are split at hour boundaries and dayStartHour is a whole hour, so no
+// piece straddles a day boundary and only the bucket key changes.
+func ByDayOf(segs []Segment, loc *time.Location, dayStartHour int) []DayTotals {
 	byKey := map[string]*Totals{}
-	walkSegments(samples, p, loc, func(start time.Time, d time.Duration, st activity.State) {
-		key := LogicalDate(start, p.DayStartHour)
+	walkSegments(segs, loc, func(start time.Time, d time.Duration, st activity.State) {
+		key := LogicalDate(start, dayStartHour)
 		t := byKey[key]
 		if t == nil {
 			t = &Totals{}
@@ -136,12 +168,22 @@ func ByDay(samples []activity.Sample, p Params, loc *time.Location) []DayTotals 
 	return out
 }
 
-// ByHourOfDay folds every day in the range into 24 hour-of-day buckets (index
-// 0..23 in the aggregation location) — the shape a time-of-day heatmap wants.
-func ByHourOfDay(samples []activity.Sample, p Params, loc *time.Location) [24]Totals {
+// ByDay returns per-logical-day totals across all samples.
+func ByDay(samples []activity.Sample, p Params, loc *time.Location) []DayTotals {
+	return ByDayOf(Segments(samples, p, loc), loc, p.DayStartHour)
+}
+
+// ByHourOfDayOf folds a segment list into 24 hour-of-day buckets (index 0..23
+// in the aggregation location) — the shape a time-of-day heatmap wants.
+func ByHourOfDayOf(segs []Segment, loc *time.Location) [24]Totals {
 	var buckets [24]Totals
-	walkSegments(samples, p, loc, func(start time.Time, d time.Duration, st activity.State) {
+	walkSegments(segs, loc, func(start time.Time, d time.Duration, st activity.State) {
 		buckets[start.Hour()].add(st, d)
 	})
 	return buckets
+}
+
+// ByHourOfDay folds every day across all samples into hour-of-day buckets.
+func ByHourOfDay(samples []activity.Sample, p Params, loc *time.Location) [24]Totals {
+	return ByHourOfDayOf(Segments(samples, p, loc), loc)
 }

@@ -100,7 +100,12 @@ core/
   is filed whole under the day it began, so a read that stopped at `until` cut a
   session still running there and made a day's figures depend on the `--until`
   asked for. The rules that look at the away *after* a span need that read too.
-  `report` / `today` are per-second totals and still read exactly their window.
+  `report` / `today` use the same read (ADR 0005): they clip the segments to the
+  window and total them, so the two families cannot disagree about an instant.
+  The read also carries one neighbour sample on each side, so a recording gap
+  longer than the read is an interval between two samples and becomes away; the
+  one in front is added as an away marker, because with its own state it opens a
+  sliver of a session that `now` would show.
 - **The hour split walks UTC quarter-hours** (`nextHour`). Rebuilding an hour
   from its calendar fields hung when clocks fall back (the repeated hour resolves
   to its first occurrence), and stepping a whole hour mis-bucketed where clocks
@@ -109,10 +114,6 @@ core/
   on a quarter.
 - **An unknown config key is an error.** A misspelt key used to be skipped,
   leaving a rule on at its default when the user had written it off.
-- **The idle-before-away rule is not corrected at the edges of a read.** Padding
-  the read and clipping would change `report` / `today` output even with the
-  rule off. The residual (at most the limit, only when the change to away falls
-  across the read's edge) is accepted — ADR 0003 §3.3.
 - **`present` never times out.** `Classify` returns `present` for as long as the
   display is on and the machine unlocked, so a Mac held awake emits an activity
   run that never ends on its own. That is why `Sessions()` has a backstop: under

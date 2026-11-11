@@ -6,6 +6,36 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **`report` and `today` total from the read `timeline` uses**, cut to the
+  window ([ADR 0005](docs/en/adr/0005-report-reads-what-timeline-reads.md)). They
+  read only the samples inside their window, so at its first and last minutes
+  they could differ from `timeline` by a brief visit (up to 2 minutes) or a
+  no-input stretch (up to 10) — the residual ADR 0003 and 0004 had accepted. The
+  two now agree about every instant.
+- With that, `report` / `today` count every second of a window the record covers:
+  a sleep straddling the start of the window is away from the start (it used to
+  be counted from the first sample inside), a past day totals 24 hours, and a day
+  spent wholly asleep appears in `days` as a day of away. On a machine that never
+  sleeps almost nothing moves (checked on 125 days: operating and present
+  identical, away up by 6 seconds).
+- `report`'s `sample_count` counts `[since, until)`, as `timeline`'s does. A
+  sample exactly at `until` used to be counted by both of two adjacent windows.
+
+### Fixed
+
+- A window inside a long break in the record — the machine off for a week — is
+  counted as away, whatever window it is asked with. The read reaches a fixed
+  span either side of the window; inside a longer break it found no sample, so
+  the day counted nothing when asked for alone and 24 hours of away when asked
+  for with a wider window. The read now carries the sample before it and the one
+  after it.
+- `--until <today>` no longer reads samples stamped after now. The hold at the
+  present was skipped when `until` lay in the future, which it does for today.
+- Under a report with no samples but with away counted, the hint no longer asks
+  whether the daemon is running.
+
 ## [0.5.0] - 2026-11-11
 
 ### Changed

@@ -172,7 +172,8 @@ func dropBriefVisits(segs []Segment, brief, breakThreshold time.Duration) []Segm
   戻ることがある」を加える。2 分を超える活動のあるセッションの `start` は動かない。
 - **本物の短い作業も消える。** 休憩のあいだに 2 分以下で済ませた作業（返信、承認）は数えられない。
   §1 のとおり区別する根拠はデータに無く、損失は 1 回あたり 2 分以内である。受け入れる。
-- **期間の端の残余（`report`／`today`）。** この 2 つは指定された期間だけを読むので、論理日の最初の
+- **期間の端の残余（`report`／`today`）— [ADR 0005](0005-report-reads-what-timeline-reads.ja.md) で
+  解消した。記録として残す。** この 2 つは指定された期間だけを読むので、論理日の最初の
   `break_minutes`（既定で 4:00〜4:10）にある短い立ち寄りは、直前の away が見えず、活動として数える。
   `timeline`／`now` は前から読むので数えない。食い違いは 1 回あたり `brief_visit`（2 分）以内。
   期間の最後の `break_minutes` にある立ち寄りも同じ。ADR 0003 §3.3 と同じ理由（読み込みに余白を足して

@@ -128,6 +128,11 @@ their own copy of the same attribution.
 
 ### 3.3 The edges of a read — left alone
 
+> **Superseded by [ADR 0005](0005-report-reads-what-timeline-reads.md)**, which
+> has `report` / `today` total from the read `timeline` uses. The residual
+> described here no longer exists; the section is kept as the record of why it
+> was first accepted.
+
 A segment is judged by what surrounds it, so the result can differ at the edges
 of what was read.
 

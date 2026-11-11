@@ -491,19 +491,25 @@ func toJSONTotals(t aggregate.Totals) jsonTotals {
 	}
 }
 
-// buildReport aggregates samples over [since, until] into the report payload.
+// buildReport aggregates the window [since, until) into the report payload.
+// samples may — and from the commands do — reach beyond the window on both
+// sides, so the segments at its edges are derived with their surroundings.
 // Pure: no I/O, deterministic for given inputs. Day buckets are logical days.
 func buildReport(samples []activity.Sample, since, until time.Time, p aggregate.Params, loc *time.Location) jsonReport {
 	dayStartHour := p.DayStartHour
-	total := aggregate.Range(samples, p, loc)
-	days := aggregate.ByDay(samples, p, loc)
-	hod := aggregate.ByHourOfDay(samples, p, loc)
+	// The same segment list `timeline` derives from these samples, cut down to
+	// the window: the two commands cannot then disagree about an instant, and
+	// every second of the window that the record covers is counted (ADR 0005).
+	segs := aggregate.Clip(aggregate.Segments(samples, p, loc), since, until)
+	total := aggregate.RangeOf(segs, loc)
+	days := aggregate.ByDayOf(segs, loc, dayStartHour)
+	hod := aggregate.ByHourOfDayOf(segs, loc)
 
 	rep := jsonReport{
 		Since:       aggregate.LogicalDate(since.In(loc), dayStartHour),
 		Until:       aggregate.LogicalDate(until.Add(-time.Second).In(loc), dayStartHour),
 		Timezone:    loc.String(),
-		SampleCount: len(samples),
+		SampleCount: countInRange(samples, since, until),
 		Total:       toJSONTotals(total),
 		Days:        make([]jsonDay, 0, len(days)),
 		HourOfDay:   make([]jsonTotals, 24),

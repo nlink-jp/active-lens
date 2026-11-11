@@ -25,6 +25,10 @@ type Store interface {
 	// Query returns samples with ts in [since, until], ordered ascending. A zero
 	// since or until means unbounded on that end.
 	Query(since, until time.Time) ([]activity.Sample, error)
+	// LastBefore returns the latest sample with ts strictly before t, if any.
+	LastBefore(t time.Time) (sample activity.Sample, ok bool, err error)
+	// FirstAfter returns the earliest sample with ts strictly after t, if any.
+	FirstAfter(t time.Time) (sample activity.Sample, ok bool, err error)
 	// Last returns the most recently recorded sample, if any.
 	Last() (sample activity.Sample, ok bool, err error)
 	Close() error
@@ -108,6 +112,28 @@ func (s *sqliteStore) Last() (activity.Sample, bool, error) {
 	var unix int64
 	var state string
 	err := s.db.QueryRow(`SELECT ts, state FROM samples ORDER BY ts DESC LIMIT 1`).Scan(&unix, &state)
+	if err == sql.ErrNoRows {
+		return activity.Sample{}, false, nil
+	}
+	if err != nil {
+		return activity.Sample{}, false, err
+	}
+	return activity.Sample{TS: time.Unix(unix, 0), State: activity.State(state)}, true, nil
+}
+
+func (s *sqliteStore) LastBefore(t time.Time) (activity.Sample, bool, error) {
+	return s.one(`SELECT ts, state FROM samples WHERE ts < ? ORDER BY ts DESC LIMIT 1`, t.Unix())
+}
+
+func (s *sqliteStore) FirstAfter(t time.Time) (activity.Sample, bool, error) {
+	return s.one(`SELECT ts, state FROM samples WHERE ts > ? ORDER BY ts ASC LIMIT 1`, t.Unix())
+}
+
+// one runs a single-row query; no row is "not found", not an error.
+func (s *sqliteStore) one(q string, args ...any) (activity.Sample, bool, error) {
+	var unix int64
+	var state string
+	err := s.db.QueryRow(q, args...).Scan(&unix, &state)
 	if err == sql.ErrNoRows {
 		return activity.Sample{}, false, nil
 	}

@@ -256,10 +256,6 @@ labels. Nothing leaves your machine.
 - Work done in two minutes or less between two breaks — a quick reply — is not
   counted (`work.brief_visit_minutes`); nothing in the signals separates it from
   a touch in passing.
-- `report` / `today` read only the window they are given, so at the very start
-  and end of that window (its first and last ten minutes) they can differ from
-  `timeline` by one such touch (at most two minutes) or one no-input stretch (at
-  most ten). Day boundaries inside a multi-day report are not affected.
 - No input for under ten minutes cannot be told apart from having left: locking
   the screen and walking off right after reading counts that reading as absence.
 - Placing the DB in an iCloud/Dropbox folder assumes a single writer (one

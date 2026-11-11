@@ -153,9 +153,10 @@ const maxLookback = 14 * 24 * time.Hour
 // away after it. `lookback` is long enough ahead for the same reason it is
 // behind: a session is cut at 48 h and the absence that ends one is a
 // session_gap, so any session begun before `until` ends inside it. With `until`
-// at now there is nothing ahead to read and nothing changes — and the read is
-// held to the present, so a sample stamped in the future (the clock was set
-// back) cannot put a session's end ahead of now.
+// at now there is nothing ahead to read and nothing changes. The read is always
+// held to the present — also when `until` lies after now, as it does for
+// `--until <today>` — so a sample stamped in the future (the clock was set back)
+// cannot put a session's end ahead of now.
 //
 // Widening stops, uncapped, once a wider read finds nothing earlier: the stream
 // then begins at the first sample ever recorded (or after a silence longer than
@@ -166,8 +167,9 @@ func samplesForWindow(st sampleQuerier, since, until time.Time,
 	cfg config.Config, loc *time.Location) ([]activity.Sample, bool, error) {
 	p := paramsOf(cfg)
 	back := lookback(cfg)
+	now := clockNow()
 	end := until.Add(lookback(cfg))
-	if now := clockNow(); end.After(now) && !until.After(now) {
+	if end.After(now) {
 		end = now
 	}
 	var earliest time.Time
@@ -176,22 +178,62 @@ func samplesForWindow(st sampleQuerier, since, until time.Time,
 		if err != nil {
 			return nil, false, err
 		}
-		if aggregate.StartsAfterABreak(samples, p, loc) {
-			return samples, false, nil
+		capped, done := false, aggregate.StartsAfterABreak(samples, p, loc)
+		if !done {
+			head := earliestSample(samples)
+			switch {
+			case !first && head.Equal(earliest):
+				done = true
+			case back >= maxLookback:
+				capped, done = true, true
+			}
+			earliest = head
 		}
-		head := earliestSample(samples)
-		if !first && head.Equal(earliest) {
-			return samples, false, nil
-		}
-		earliest = head
-		if back >= maxLookback {
-			return samples, true, nil
+		if done {
+			samples, err = withNeighbours(st, samples, since.Add(-back), end, now)
+			return samples, capped, err
 		}
 		back += 48 * time.Hour
 		if back > maxLookback {
 			back = maxLookback
 		}
 	}
+}
+
+// withNeighbours adds the sample just before the read and the one just after
+// it. A read covers a fixed span either side of the window; a recording gap
+// longer than that — the machine off for a week — left a window inside the gap
+// with no sample in reach, so nothing in it was counted, while the same day
+// asked for with a wider window was counted as away. With its two neighbours
+// the gap is an interval between two samples like any other, and the
+// attribution turns it into away. Before the first sample ever and after the
+// last there is no neighbour, and nothing is counted there.
+//
+// The work log does not move. The sample in front is added as a marker of
+// where the record resumes from, in the away state whatever it recorded: its
+// own state would be credited for up to max_gap, a sliver of activity at least
+// 48 h before the window that `now` would show as the last session when
+// nothing has been done since. As away it opens no session and leaves the first
+// active segment — the instant sessions and their day-boundary cuts are
+// measured from — where it was. The sample behind has no interval after it, so
+// it adds no activity, only the time up to it.
+func withNeighbours(st sampleQuerier, samples []activity.Sample, from, to, now time.Time) ([]activity.Sample, error) {
+	before, ok, err := st.LastBefore(from)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		marker := activity.Sample{TS: before.TS, State: activity.Away}
+		samples = append([]activity.Sample{marker}, samples...)
+	}
+	after, ok, err := st.FirstAfter(to)
+	if err != nil {
+		return nil, err
+	}
+	if ok && !after.TS.After(now) {
+		samples = append(samples, after)
+	}
+	return samples, nil
 }
 
 // clockNow is the wall clock, replaceable in tests.
@@ -216,7 +258,7 @@ func noteIfCapped(w io.Writer, capped bool) {
 		return
 	}
 	fmt.Fprintf(w, "active-lens: this Mac has been awake without a break for longer than %s, "+
-		"so session boundaries are derived from that point and may differ from a longer view\n",
+		"so the derivation starts from that point and may differ from a longer view\n",
 		maxLookback)
 }
 
@@ -224,6 +266,8 @@ func noteIfCapped(w io.Writer, capped bool) {
 // be tested without a database.
 type sampleQuerier interface {
 	Query(since, until time.Time) ([]activity.Sample, error)
+	LastBefore(t time.Time) (activity.Sample, bool, error)
+	FirstAfter(t time.Time) (activity.Sample, bool, error)
 }
 
 func runNow(args []string) error {
@@ -357,10 +401,12 @@ func emitReport(w io.Writer, cfg config.Config, since, until time.Time, loc *tim
 	}
 	defer st.Close()
 
-	samples, err := st.Query(since, until)
+	// The read `timeline` uses, so the two agree about every instant (ADR 0005).
+	samples, capped, err := samplesForWindow(st, since, until, cfg, loc)
 	if err != nil {
 		return err
 	}
+	noteIfCapped(os.Stderr, capped)
 	rep := buildReport(samples, since, until, paramsOf(cfg), loc)
 
 	if asJSON {
@@ -369,10 +415,24 @@ func emitReport(w io.Writer, cfg config.Config, since, until time.Time, loc *tim
 		return enc.Encode(rep)
 	}
 	printReportHuman(w, rep)
-	if rep.SampleCount == 0 {
-		fmt.Fprintln(w, "\nNo samples in this range. Is the daemon running? Try: active-lens status")
+	if hint := noSamplesHint(rep); hint != "" {
+		fmt.Fprintln(w, "\n"+hint)
 	}
 	return nil
+}
+
+// noSamplesHint is the line under a report with no samples in its range. A
+// range the record brackets is counted as away without a sample in it — the
+// machine was asleep, or the daemon stopped — and "is the daemon running?"
+// under a table of away time would be the wrong question.
+func noSamplesHint(rep jsonReport) string {
+	if rep.SampleCount > 0 {
+		return ""
+	}
+	if rep.Total.OperatingSeconds+rep.Total.PresentSeconds+rep.Total.AwaySeconds == 0 {
+		return "No samples in this range. Is the daemon running? Try: active-lens status"
+	}
+	return "No samples in this range: nothing was recorded during it (the machine was asleep, or the daemon was not running)."
 }
 
 // --- export ---------------------------------------------------------------

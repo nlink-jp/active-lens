@@ -210,7 +210,8 @@ Measured (125 days, limit 2 minutes):
 - **Real short work goes too.** Work done in 2 minutes or less between two breaks
   (a reply, an approval) is not counted. As §1 says, nothing in the data
   separates it, and the loss is at most 2 minutes each time. Accepted.
-- **The edge residual (`report` / `today`).** These read only the window they are
+- **The edge residual (`report` / `today`) — resolved by
+  [ADR 0005](0005-report-reads-what-timeline-reads.md); kept as the record.** These read only the window they are
   given, so a brief visit in the first `break_minutes` of a logical day (04:00 to
   04:10 by default) has no visible away before it and is counted as activity;
   `timeline` / `now` read from before and do not count it. The disagreement is at

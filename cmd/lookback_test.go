@@ -15,6 +15,9 @@ import (
 type wholeStream struct {
 	samples []activity.Sample
 	queries int
+	// noNeighbours answers LastBefore/FirstAfter with "none", giving the read
+	// as it was before neighbours were added.
+	noNeighbours bool
 }
 
 func (w *wholeStream) Query(since, until time.Time) ([]activity.Sample, error) {
@@ -26,6 +29,34 @@ func (w *wholeStream) Query(since, until time.Time) ([]activity.Sample, error) {
 		}
 	}
 	return out, nil
+}
+
+func (w *wholeStream) LastBefore(t time.Time) (activity.Sample, bool, error) {
+	var out activity.Sample
+	found := false
+	if w.noNeighbours {
+		return out, false, nil
+	}
+	for _, s := range w.samples {
+		if s.TS.Before(t) && (!found || s.TS.After(out.TS)) {
+			out, found = s, true
+		}
+	}
+	return out, found, nil
+}
+
+func (w *wholeStream) FirstAfter(t time.Time) (activity.Sample, bool, error) {
+	var out activity.Sample
+	found := false
+	if w.noNeighbours {
+		return out, false, nil
+	}
+	for _, s := range w.samples {
+		if s.TS.After(t) && (!found || s.TS.Before(out.TS)) {
+			out, found = s, true
+		}
+	}
+	return out, found, nil
 }
 
 func unbroken(from time.Time, d time.Duration) []activity.Sample {
