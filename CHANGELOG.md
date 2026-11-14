@@ -6,6 +6,11 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `make package` runs `govulncheck ./...` first (`make vuln`) and stops on a
+  finding, so a release cannot be built past one.
+
 ## [0.6.0] - 2026-11-12
 
 ### Changed

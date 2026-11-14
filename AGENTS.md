@@ -14,6 +14,7 @@ make build     # -> dist/active-lens  (NEVER `go build` directly; CGO_ENABLED=1)
 make test      # go test ./...
 make vet       # go vet (darwin/cgo) + CGO_ENABLED=0 GOOS=linux vet (stub check)
 make package   # zip + notarize the darwin/arm64 release asset
+make vuln            # govulncheck over the build; `make package` runs it first and stops on a finding
 make verify-release  # gate: .notarized marker + freshness (run before upload)
 ```
 

@@ -13,7 +13,7 @@ export CGO_ENABLED := 1
 CODESIGN_IDENTITY ?= Developer ID Application
 NOTARY_PROFILE    ?= nlink-jp-notary
 
-.PHONY: build build-all package verify-release test vet clean
+.PHONY: build build-all package verify-release test vet clean vuln
 
 ## build: compile the binary into dist/ (never use `go build` directly)
 build:
@@ -28,10 +28,17 @@ build-all:
 	GOARCH=arm64 go build $(LDFLAGS) -o $(DIST_DIR)/$(BINARY)-darwin-arm64 .
 	@scripts/codesign-darwin.sh $(DIST_DIR)/$(BINARY)-darwin-arm64 "$(CODESIGN_IDENTITY)" "$(BINARY)"
 
+## vuln: known vulnerabilities in the modules and the standard library this
+## build uses (govulncheck). `package` depends on it, so a release cannot be
+## built past a finding. It needs the network, and its database changes under
+## an unchanged tree: a finding can appear without a commit.
+vuln:
+	govulncheck ./...
+
 ## package: build, zip (with README.md and the canonical binary name inside),
 ## and notarize. Matches the release asset naming:
 ## active-lens-vX.Y.Z-darwin-arm64.zip
-package: build-all
+package: vuln build-all
 	@cd $(DIST_DIR) && for f in $(BINARY)-darwin-*; do \
 		case "$$f" in *.zip) continue ;; esac; \
 		suffix=$${f#$(BINARY)-}; \
