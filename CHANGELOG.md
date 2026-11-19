@@ -6,6 +6,14 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`timeline --last-month` and `report --last-month`** cover the whole of the
+  previous month, from the start of its first logical day to the start of the
+  current month's. The current month is `--month`'s, so just after midnight on
+  the 1st (before `day_start_hour`) it is the month before last. Neither month
+  flag can be combined with the other or with `--since`, `--until` or `--days`.
+
 ## [0.7.0] - 2026-11-19
 
 ### Added

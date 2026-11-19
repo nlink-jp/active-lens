@@ -159,16 +159,83 @@ func TestBuildTimelineForThisMonth(t *testing.T) {
 	}
 }
 
-func TestMonthConflicts(t *testing.T) {
+func TestResolveLastMonth(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
-		args    []string
-		wantErr string // "" = no error
+		name                 string
+		now                  time.Time
+		dayStart             int
+		wantSince, wantUntil string
 	}{
-		{[]string{"--month"}, ""},
-		{[]string{"--month", "--json"}, ""},
-		{[]string{"--month", "--days", "7"}, "--days"},
-		{[]string{"--month", "--since", "2026-11-01"}, "--since"},
-		{[]string{"--until", "2026-11-05", "--month"}, "--until"},
+		{"mid-month", time.Date(2026, 11, 19, 10, 0, 0, 0, tokyo), 4, "2026-10-01 04:00", "2026-11-01 04:00"},
+		// Before day_start_hour on the 1st, October is still "this month", so
+		// "last month" is September.
+		{"1st, before the boundary", time.Date(2026, 11, 1, 2, 0, 0, 0, tokyo), 4, "2026-09-01 04:00", "2026-10-01 04:00"},
+		{"1st, on the boundary", time.Date(2026, 11, 1, 4, 0, 0, 0, tokyo), 4, "2026-10-01 04:00", "2026-11-01 04:00"},
+		{"across the year", time.Date(2027, 1, 15, 12, 0, 0, 0, tokyo), 4, "2026-12-01 04:00", "2027-01-01 04:00"},
+		{"new year, before the boundary", time.Date(2027, 1, 1, 3, 0, 0, 0, tokyo), 4, "2026-11-01 04:00", "2026-12-01 04:00"},
+		// March 31 minus a month must not normalise into March: the window
+		// starts from the 1st, so February comes out whole.
+		{"after a short month", time.Date(2026, 3, 31, 12, 0, 0, 0, tokyo), 4, "2026-02-01 04:00", "2026-03-01 04:00"},
+		{"midnight day start", time.Date(2026, 11, 1, 0, 0, 0, 0, tokyo), 0, "2026-10-01 00:00", "2026-11-01 00:00"},
+		// New York leaves DST on 2026-11-01 at 02:00, before the 04:00 that
+		// ends October's window: both ends stay at 04:00 local, with the
+		// window's two ends on different UTC offsets.
+		{"DST zone", time.Date(2026, 11, 19, 10, 0, 0, 0, newYork), 4, "2026-10-01 04:00", "2026-11-01 04:00"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			since, until := resolveLastMonth(c.now, c.dayStart)
+			if got := since.Format("2006-01-02 15:04"); got != c.wantSince {
+				t.Errorf("since = %s, want %s", got, c.wantSince)
+			}
+			if got := until.Format("2006-01-02 15:04"); got != c.wantUntil {
+				t.Errorf("until = %s, want %s", got, c.wantUntil)
+			}
+		})
+	}
+}
+
+// The timeline for a --last-month window lists every logical day of that month,
+// empty days included, and none of the current month's.
+func TestBuildTimelineForLastMonth(t *testing.T) {
+	loc := time.UTC
+	since, until := resolveLastMonth(time.Date(2026, 11, 19, 10, 0, 0, 0, loc), 4)
+	tl := buildTimeline(nil, since, until, testParams(2*time.Minute), loc)
+	if len(tl.Days) != 31 {
+		t.Fatalf("got %d days, want 31 (10-01 through 10-31)", len(tl.Days))
+	}
+	if first, last := tl.Days[0].Date, tl.Days[len(tl.Days)-1].Date; first != "2026-10-01" || last != "2026-10-31" {
+		t.Errorf("days run %s..%s, want 2026-10-01..2026-10-31", first, last)
+	}
+}
+
+func TestMonthWindow(t *testing.T) {
+	now := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		args      []string
+		wantOK    bool
+		wantSince string // when wantOK
+		wantErr   string // "" = no error
+	}{
+		{[]string{}, false, "", ""},
+		{[]string{"--days", "7"}, false, "", ""},
+		{[]string{"--month"}, true, "2026-11-01", ""},
+		{[]string{"--month", "--json"}, true, "2026-11-01", ""},
+		{[]string{"--last-month"}, true, "2026-10-01", ""},
+		{[]string{"--month=false", "--days", "7"}, false, "", ""},
+		{[]string{"--month", "--days", "7"}, false, "", "--days"},
+		{[]string{"--month", "--since", "2026-11-01"}, false, "", "--since"},
+		{[]string{"--until", "2026-11-05", "--month"}, false, "", "--until"},
+		{[]string{"--last-month", "--since", "2026-10-01"}, false, "", "--last-month cannot be combined with --since"},
+		{[]string{"--month", "--last-month"}, false, "", "--last-month"},
 	}
 	for _, c := range cases {
 		fs := flag.NewFlagSet("timeline", flag.ContinueOnError)
@@ -176,16 +243,21 @@ func TestMonthConflicts(t *testing.T) {
 		fs.String("until", "", "")
 		fs.Int("days", 0, "")
 		fs.Bool("month", false, "")
+		fs.Bool("last-month", false, "")
 		fs.Bool("json", false, "")
 		if err := fs.Parse(c.args); err != nil {
 			t.Fatalf("%v: parse: %v", c.args, err)
 		}
-		err := monthConflicts(fs)
+		since, _, ok, err := monthWindow(fs, now, 4)
 		switch {
 		case c.wantErr == "" && err != nil:
 			t.Errorf("%v: unexpected error %v", c.args, err)
 		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
 			t.Errorf("%v: error = %v, want one naming %s", c.args, err, c.wantErr)
+		case ok != c.wantOK:
+			t.Errorf("%v: ok = %v, want %v", c.args, ok, c.wantOK)
+		case ok && since.Format("2006-01-02") != c.wantSince:
+			t.Errorf("%v: since = %v, want %s", c.args, since, c.wantSince)
 		}
 	}
 }

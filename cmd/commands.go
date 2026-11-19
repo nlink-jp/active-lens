@@ -340,25 +340,22 @@ func runReport(args []string) error {
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
 	sinceStr := fs.String("since", "", "start date YYYY-MM-DD (default: 7 days ago)")
 	untilStr := fs.String("until", "", "end date YYYY-MM-DD, inclusive (default: today)")
-	month := fs.Bool("month", false, "this month: its first logical day through now (not with --since/--until)")
+	fs.Bool("month", false, "this month: its first logical day through now (not with --since/--until)")
+	fs.Bool("last-month", false, "the whole of the previous month (not with --since/--until)")
 	asJSON := fs.Bool("json", false, "emit JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
-	}
-	if *month {
-		if err := monthConflicts(fs); err != nil {
-			return err
-		}
 	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
 	loc := time.Local
-	var since, until time.Time
-	if *month {
-		since, until = resolveThisMonth(time.Now().In(loc), cfg.DayStartHour)
-	} else {
+	since, until, ok, err := monthWindow(fs, time.Now().In(loc), cfg.DayStartHour)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		since, until, err = resolveRange(*sinceStr, *untilStr, loc, cfg.DayStartHour)
 		if err != nil {
 			return err
@@ -372,15 +369,11 @@ func runTimeline(args []string) error {
 	sinceStr := fs.String("since", "", "start date YYYY-MM-DD (default: 7 days ago)")
 	untilStr := fs.String("until", "", "end date YYYY-MM-DD, inclusive (default: today)")
 	days := fs.Int("days", 0, "the last N logical days, ending now (overrides --since/--until)")
-	month := fs.Bool("month", false, "this month: its first logical day through now (not with --since/--until/--days)")
+	fs.Bool("month", false, "this month: its first logical day through now (not with --since/--until/--days)")
+	fs.Bool("last-month", false, "the whole of the previous month (not with --since/--until/--days)")
 	asJSON := fs.Bool("json", false, "emit JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
-	}
-	if *month {
-		if err := monthConflicts(fs); err != nil {
-			return err
-		}
 	}
 	cfg, err := loadConfig()
 	if err != nil {
@@ -388,16 +381,19 @@ func runTimeline(args []string) error {
 	}
 	loc := time.Local
 
-	var since, until time.Time
-	if *month {
-		since, until = resolveThisMonth(time.Now().In(loc), cfg.DayStartHour)
-	} else if *days > 0 {
-		since, until, err = resolveLastDays(*days, loc, cfg.DayStartHour)
-	} else {
-		since, until, err = resolveRange(*sinceStr, *untilStr, loc, cfg.DayStartHour)
-	}
+	since, until, ok, err := monthWindow(fs, time.Now().In(loc), cfg.DayStartHour)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		if *days > 0 {
+			since, until, err = resolveLastDays(*days, loc, cfg.DayStartHour)
+		} else {
+			since, until, err = resolveRange(*sinceStr, *untilStr, loc, cfg.DayStartHour)
+		}
+		if err != nil {
+			return err
+		}
 	}
 
 	st, err := store.Open(cfg.DBPath)

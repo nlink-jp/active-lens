@@ -622,9 +622,36 @@ func resolveThisMonth(now time.Time, dayStartHour int) (since, until time.Time) 
 	return time.Date(y, m, 1, dayStartHour, 0, 0, 0, now.Location()), now
 }
 
-// monthConflicts refuses --month alongside another flag that picks the range.
-// Silently letting one win would answer a question the user did not ask.
-func monthConflicts(fs *flag.FlagSet) error {
+// resolveLastMonth turns --last-month into the whole of the previous month: from
+// the start of its first logical day to the start of this month's. "This month"
+// is resolveThisMonth's, so just after midnight on the 1st (before
+// day_start_hour) the month before last is the one reported. Pure.
+func resolveLastMonth(now time.Time, dayStartHour int) (since, until time.Time) {
+	thisMonth, _ := resolveThisMonth(now, dayStartHour)
+	return thisMonth.AddDate(0, -1, 0), thisMonth
+}
+
+// monthWindow resolves --month / --last-month into a window. ok is false when
+// neither is on, and the caller falls back to --days / --since / --until. A
+// month flag refuses every other flag that picks the range, the other month
+// flag included: silently letting one win would answer a question the user did
+// not ask. Pure apart from reading fs; now is injected.
+func monthWindow(fs *flag.FlagSet, now time.Time, dayStartHour int) (since, until time.Time, ok bool, err error) {
+	on := func(name string) bool {
+		f := fs.Lookup(name)
+		return f != nil && f.Value.String() == "true"
+	}
+	var picked string
+	switch {
+	case on("month") && on("last-month"):
+		return since, until, false, fmt.Errorf("--month cannot be combined with --last-month")
+	case on("month"):
+		picked = "month"
+	case on("last-month"):
+		picked = "last-month"
+	default:
+		return since, until, false, nil
+	}
 	var others []string
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -633,7 +660,12 @@ func monthConflicts(fs *flag.FlagSet) error {
 		}
 	})
 	if len(others) > 0 {
-		return fmt.Errorf("--month cannot be combined with %s", strings.Join(others, ", "))
+		return since, until, false, fmt.Errorf("--%s cannot be combined with %s", picked, strings.Join(others, ", "))
 	}
-	return nil
+	if picked == "month" {
+		since, until = resolveThisMonth(now, dayStartHour)
+	} else {
+		since, until = resolveLastMonth(now, dayStartHour)
+	}
+	return since, until, true, nil
 }
