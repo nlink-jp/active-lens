@@ -142,6 +142,7 @@ open だが今まさに離席中なら `paused` です。離席から 30 分の�
 ```sh
 active-lens timeline                                   # 直近7日
 active-lens timeline --days 30                         # 直近30論理日
+active-lens timeline --month                           # 当月（今まで）
 active-lens timeline --since 2026-07-01 --until 2026-07-08
 active-lens timeline --json                            # GUI 向け
 ```
@@ -161,17 +162,26 @@ active-lens timeline --json                            # GUI 向け
 ありません。`--json` 出力には各日の色付きスパン（タイムライン表示用）、`sessions` と
 `blocks`、導出した `work_start` / `work_end` / `breaks`、そして
 `carried_in` / `carried_out` が含まれます。`--since` の日付を自分で計算するより
-`--days N` を使ってください。境界を含めて論理日で範囲を解決します。
+`--days N` や `--month` を使ってください。境界を含めて論理日で範囲を解決します。
+
+`--month` は当月の最初の論理日の始まりから今までを対象にします。月は論理日の月です。
+`day_start_hour = 4` で 1 日の 02:00 に実行すると、まだ前月の最終日の中にいるので、
+前月が表示されます。既定の `day_boundary = session` では、月の最終日の夜に始まった
+セッションは、日と同じく丸ごとその月に入ります。`report --month` は秒をその秒が
+あった場所で数えるので、月の端で両者が食い違うことがあります。`--month` は
+`--since`・`--until`・`--days` と同時には使えません。
 
 ### report / today
 
 ```sh
 active-lens today
 active-lens report --since 2026-07-01 --until 2026-07-08
+active-lens report --month          # 当月（今まで）
 active-lens report --json           # GUI 向けの機械可読出力
 ```
 
 `--until` は当日を含みます。フラグ無しの `report` は直近 7 日間を対象にします。
+`--month` は `timeline --month` と同じ範囲です。
 日バケットは論理日なので、01:00 に叩いた `today` は、いま自分がその只中にいる夜を
 そのまま報告します。時間帯ヒートマップは実時刻の時間帯を保ちます。
 

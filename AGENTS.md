@@ -121,6 +121,12 @@ core/
   change part-way through an hour (Chatham, at :45). Every offset in use is a
   multiple of fifteen minutes, so every local hour start and clock change falls
   on a quarter.
+- **`--month` is the logical day's month** (`resolveThisMonth`). It starts at
+  `day_start_hour` on the 1st and takes its month from `LogicalDayStart(now)`,
+  not from the wall clock: before `day_start_hour` on the 1st the previous month
+  is still current. Range resolution stays in the CLI, so the GUI never does date
+  arithmetic (ADR 0001); `--month` refuses `--since` / `--until` / `--days`
+  rather than letting one win.
 - **An unknown config key is an error.** A misspelt key used to be skipped,
   leaving a rule on at its default when the user had written it off.
 - **`present` never times out.** `Classify` returns `present` for as long as the

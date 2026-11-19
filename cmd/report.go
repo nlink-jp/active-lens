@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/nlink-jp/active-lens/core/activity"
@@ -608,4 +610,30 @@ func resolveLastDays(n int, loc *time.Location, dayStartHour int) (since, until 
 	}
 	now := time.Now().In(loc)
 	return aggregate.LogicalDayStart(now, dayStartHour).AddDate(0, 0, -(n - 1)), now, nil
+}
+
+// resolveThisMonth turns --month into a [since, until] window from the start of
+// the first logical day of the current month to now. The month is the logical
+// day's month, not the wall clock's: at 02:00 on the 1st with day_start_hour 4
+// you are still in the last logical day of the previous month, so that month is
+// the one reported. Pure; now is injected so the boundary can be tested.
+func resolveThisMonth(now time.Time, dayStartHour int) (since, until time.Time) {
+	y, m, _ := aggregate.LogicalDayStart(now, dayStartHour).Date()
+	return time.Date(y, m, 1, dayStartHour, 0, 0, 0, now.Location()), now
+}
+
+// monthConflicts refuses --month alongside another flag that picks the range.
+// Silently letting one win would answer a question the user did not ask.
+func monthConflicts(fs *flag.FlagSet) error {
+	var others []string
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "since", "until", "days":
+			others = append(others, "--"+f.Name)
+		}
+	})
+	if len(others) > 0 {
+		return fmt.Errorf("--month cannot be combined with %s", strings.Join(others, ", "))
+	}
+	return nil
 }

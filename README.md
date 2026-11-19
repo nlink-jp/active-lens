@@ -149,6 +149,7 @@ start, breaks, and end of each work session — from the raw samples.
 ```sh
 active-lens timeline                                   # last 7 days
 active-lens timeline --days 30                         # last 30 logical days
+active-lens timeline --month                           # this month, through now
 active-lens timeline --since 2026-07-01 --until 2026-07-08
 active-lens timeline --json                            # for the GUI
 ```
@@ -168,18 +169,30 @@ the boundary is marked `continues into next day` / `continues from previous day`
 so a cut is never mistaken for a punctual start or finish. The `--json` output
 includes each day's colored spans (for a timeline view), its `sessions` and
 `blocks`, the derived `work_start` / `work_end` / `breaks`, and the
-`carried_in` / `carried_out` flags. Prefer `--days N` over computing a `--since`
-date yourself: it resolves the range against the logical day, boundary included.
+`carried_in` / `carried_out` flags. Prefer `--days N` or `--month` over computing
+a `--since` date yourself: they resolve the range against the logical day,
+boundary included.
+
+`--month` covers the current month from the start of its first logical day
+through now. The month is the logical day's: at 02:00 on the 1st with
+`day_start_hour = 4` you are still in the last day of the previous month, so that
+month is the one shown. Under the default `day_boundary = session`, a session
+begun on the last evening of a month is filed whole under that month, as it is
+under its day; `report --month` counts its seconds where they fell, so the two
+can differ at the month's edges. `--month` cannot be combined with `--since`,
+`--until` or `--days`.
 
 ### report / today
 
 ```sh
 active-lens today
 active-lens report --since 2026-07-01 --until 2026-07-08
+active-lens report --month          # this month, through now
 active-lens report --json           # machine-readable, for the GUI
 ```
 
-`--until` is inclusive. With no flags, `report` covers the last 7 days. Day
+`--until` is inclusive. With no flags, `report` covers the last 7 days.
+`--month` takes the same range as `timeline --month`. Day
 buckets are logical days, so `today` at 01:00 still reports the evening you are
 in the middle of. The hour-of-day heatmap keeps real wall-clock hours.
 

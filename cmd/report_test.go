@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +99,94 @@ func TestResolveLastDays(t *testing.T) {
 	}
 	if _, _, err := resolveLastDays(0, loc, 4); err == nil {
 		t.Error("--days 0 should error")
+	}
+}
+
+func TestResolveThisMonth(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		now       time.Time
+		dayStart  int
+		wantSince string
+	}{
+		{"mid-month", time.Date(2026, 11, 19, 10, 0, 0, 0, tokyo), 4, "2026-11-01 04:00"},
+		// Before day_start_hour on the 1st the logical day is still the last
+		// day of the previous month, so that month is the one reported.
+		{"1st, before the boundary", time.Date(2026, 11, 1, 2, 0, 0, 0, tokyo), 4, "2026-10-01 04:00"},
+		{"1st, on the boundary", time.Date(2026, 11, 1, 4, 0, 0, 0, tokyo), 4, "2026-11-01 04:00"},
+		{"new year, before the boundary", time.Date(2027, 1, 1, 3, 59, 0, 0, tokyo), 4, "2026-12-01 04:00"},
+		{"midnight day start", time.Date(2026, 11, 1, 0, 0, 0, 0, tokyo), 0, "2026-11-01 00:00"},
+		{"last second of the month, midnight day start", time.Date(2026, 10, 31, 23, 59, 59, 0, tokyo), 0, "2026-10-01 00:00"},
+		// The month's first day lies before a DST change inside the month.
+		{"DST changes inside the month", time.Date(2026, 11, 19, 10, 0, 0, 0, newYork), 4, "2026-11-01 04:00"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			since, until := resolveThisMonth(c.now, c.dayStart)
+			if got := since.Format("2006-01-02 15:04"); got != c.wantSince {
+				t.Errorf("since = %s, want %s", got, c.wantSince)
+			}
+			if since.Location() != c.now.Location() {
+				t.Errorf("since is in %v, want %v", since.Location(), c.now.Location())
+			}
+			if !until.Equal(c.now) {
+				t.Errorf("until = %v, want now (%v)", until, c.now)
+			}
+		})
+	}
+}
+
+// The timeline for a --month window lists every logical day from the 1st
+// through today, empty days included, and none from the previous month.
+func TestBuildTimelineForThisMonth(t *testing.T) {
+	loc := time.UTC
+	now := time.Date(2026, 11, 19, 10, 0, 0, 0, loc)
+	since, until := resolveThisMonth(now, 4)
+	tl := buildTimeline(nil, since, until, testParams(2*time.Minute), loc)
+	if len(tl.Days) != 19 {
+		t.Fatalf("got %d days, want 19 (11-01 through 11-19)", len(tl.Days))
+	}
+	if first, last := tl.Days[0].Date, tl.Days[len(tl.Days)-1].Date; first != "2026-11-01" || last != "2026-11-19" {
+		t.Errorf("days run %s..%s, want 2026-11-01..2026-11-19", first, last)
+	}
+}
+
+func TestMonthConflicts(t *testing.T) {
+	cases := []struct {
+		args    []string
+		wantErr string // "" = no error
+	}{
+		{[]string{"--month"}, ""},
+		{[]string{"--month", "--json"}, ""},
+		{[]string{"--month", "--days", "7"}, "--days"},
+		{[]string{"--month", "--since", "2026-11-01"}, "--since"},
+		{[]string{"--until", "2026-11-05", "--month"}, "--until"},
+	}
+	for _, c := range cases {
+		fs := flag.NewFlagSet("timeline", flag.ContinueOnError)
+		fs.String("since", "", "")
+		fs.String("until", "", "")
+		fs.Int("days", 0, "")
+		fs.Bool("month", false, "")
+		fs.Bool("json", false, "")
+		if err := fs.Parse(c.args); err != nil {
+			t.Fatalf("%v: parse: %v", c.args, err)
+		}
+		err := monthConflicts(fs)
+		switch {
+		case c.wantErr == "" && err != nil:
+			t.Errorf("%v: unexpected error %v", c.args, err)
+		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
+			t.Errorf("%v: error = %v, want one naming %s", c.args, err, c.wantErr)
+		}
 	}
 }
 

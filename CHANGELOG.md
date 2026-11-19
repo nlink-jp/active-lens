@@ -6,6 +6,14 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`timeline --month` and `report --month`** cover the current month, from the
+  start of its first logical day through now. The month follows the logical day,
+  so at 02:00 on the 1st (with `day_start_hour = 4`) the previous month is still
+  the current one. `--month` refuses to be combined with `--since`, `--until` or
+  `--days` rather than letting one of them win.
+
 ### Changed
 
 - `make package` runs `govulncheck ./...` first (`make vuln`) and stops on a
