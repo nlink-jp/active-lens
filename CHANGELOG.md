@@ -6,6 +6,8 @@ All notable changes to active-lens are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-19
+
 ### Added
 
 - **`timeline --month` and `report --month`** cover the current month, from the
@@ -289,7 +291,8 @@ Packaging-only release; no change to the binary's behaviour.
 - `config.toml` for sampling interval, active threshold, gap cap, and DB path
   (minimal hand-rolled parser, no external dependency).
 
-[Unreleased]: https://github.com/nlink-jp/active-lens/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/nlink-jp/active-lens/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/nlink-jp/active-lens/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nlink-jp/active-lens/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nlink-jp/active-lens/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nlink-jp/active-lens/compare/v0.3.1...v0.4.0
